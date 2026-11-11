@@ -1,43 +1,62 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using Files.Backend.Enums;
-using System.ComponentModel;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class CreateFolderAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class CreateFolderAction : BaseUIAction, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Folder".GetLocalizedResource();
+		public string Label
+			=> Strings.Folder.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.CreateFolderDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new RichGlyph(baseGlyph: "\uE8B7");
+		public ActionCategory Category
+			=> ActionCategory.Create;
 
-		public bool IsExecutable => context.ShellPage is not null;
+		public string AccessKey
+			=> "F";
+
+		public string AutomationId
+			=> "InnerNavigationToolbarNewFolderButton";
+
+		public HotKey HotKey
+			=> new(Keys.N, KeyModifiers.CtrlShift);
+
+		public RichGlyph Glyph
+			=> new(baseGlyph: "\uE8B7");
+
+		public override bool IsExecutable =>
+			context.CanCreateItem &&
+			UIHelpers.CanShowDialog;
 
 		public CreateFolderAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			if (context.ShellPage is not null)
-				UIFilesystemHelpers.CreateFileFromDialogResultType(AddItemDialogItemType.Folder, null!, context.ShellPage);
+				_ = UIFilesystemHelpers.CreateFileFromDialogResultTypeAsync(AddItemDialogItemType.Folder, null!, context.ShellPage);
+
 			return Task.CompletedTask;
 		}
 
 		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			if (e.PropertyName is nameof(IContentPageContext.HasSelection))
-				OnPropertyChanged(nameof(IsExecutable));
+			switch (e.PropertyName)
+			{
+				case nameof(IContentPageContext.CanCreateItem):
+				case nameof(IContentPageContext.HasSelection):
+					OnPropertyChanged(nameof(IsExecutable));
+					break;
+			}
 		}
 	}
 }

@@ -1,18 +1,20 @@
-using Files.App.ViewModels;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
-using System;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Storage.Streams;
+using WinRT;
 
 namespace Files.App.UserControls
 {
 	public sealed partial class FileIcon : UserControl
 	{
-		private SelectedItemsPropertiesViewModel viewModel;
+		private SelectedItemsPropertiesViewModel? viewModel;
 
-		public SelectedItemsPropertiesViewModel ViewModel
+		public SelectedItemsPropertiesViewModel? ViewModel
 		{
 			get => viewModel;
 			set
@@ -45,17 +47,18 @@ namespace Files.App.UserControls
 
 		private double LargerItemSize { get; set; }
 
-		private static DependencyProperty FileIconImageSourceProperty { get; } = DependencyProperty.Register(nameof(FileIconImageSource), typeof(BitmapImage), typeof(FileIcon), null);
+		public static readonly DependencyProperty FileIconImageSourceProperty = DependencyProperty.Register(nameof(FileIconImageSource), typeof(BitmapImage), typeof(FileIcon), null);
 
-		private BitmapImage FileIconImageSource
+		private BitmapImage? FileIconImageSource
 		{
+			[DynamicWindowsRuntimeCast(typeof(BitmapImage))]
 			get => GetValue(FileIconImageSourceProperty) as BitmapImage;
 			set => SetValue(FileIconImageSourceProperty, value);
 		}
 
-		public static DependencyProperty FileIconImageDataProperty { get; } = DependencyProperty.Register(nameof(FileIconImageData), typeof(byte[]), typeof(FileIcon), null);
+		public static readonly DependencyProperty FileIconImageDataProperty = DependencyProperty.Register(nameof(FileIconImageData), typeof(byte[]), typeof(FileIcon), null);
 
-		public byte[] FileIconImageData
+		public byte[]? FileIconImageData
 		{
 			get => GetValue(FileIconImageDataProperty) as byte[];
 			set
@@ -63,27 +66,28 @@ namespace Files.App.UserControls
 				SetValue(FileIconImageDataProperty, value);
 				if (value is not null)
 				{
-					UpdateImageSourceAsync();
+					_ = UpdateImageSourceAsync();
 				}
 			}
 		}
 
-		private SvgImageSource CustomIconImageSource { get; set; }
+		private SvgImageSource? CustomIconImageSource { get; set; }
 
 		public FileIcon()
 		{
 			InitializeComponent();
 		}
 
-		public async void UpdateImageSourceAsync()
+		public async Task UpdateImageSourceAsync()
 		{
 			if (FileIconImageData is not null)
 			{
-				FileIconImageSource = new BitmapImage();
+				var imageSource = new BitmapImage();
+				FileIconImageSource = imageSource;
 				using InMemoryRandomAccessStream stream = new InMemoryRandomAccessStream();
 				await stream.WriteAsync(FileIconImageData.AsBuffer());
 				stream.Seek(0);
-				await FileIconImageSource.SetSourceAsync(stream);
+				await imageSource.SetSourceAsync(stream);
 			}
 		}
 	}

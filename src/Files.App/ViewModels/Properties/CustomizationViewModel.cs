@@ -1,26 +1,85 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.WinUI;
-using Files.App.Shell;
-using Files.App.Helpers;
-using Files.App.Views.Properties;
-using Files.Shared;
-using Microsoft.UI.Xaml;
+﻿using Files.Shared.Helpers;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
-using System;
-using System.Collections.ObjectModel;
 using System.IO;
-using System.Threading.Tasks;
-using Windows.Storage.Pickers;
+using System.Windows.Input;
 
 namespace Files.App.ViewModels.Properties
 {
-	public class CustomizationViewModel : ObservableObject
+	public sealed partial class CustomizationViewModel : ObservableObject
 	{
-		public CustomizationViewModel(IShellPage appInstance, BaseProperties baseProperties)
-		{
-			Filesystem.ListedItem item;
+		private ICommonDialogService CommonDialogService { get; } = Ioc.Default.GetRequiredService<ICommonDialogService>();
 
+		private static string DefaultIconDllFilePath
+			=> Path.Combine(Constants.UserEnvironmentPaths.SystemRootPath, "System32", "SHELL32.dll");
+
+		private readonly AppWindow? _appWindow;
+
+		private readonly IShellPage? _appInstance;
+
+		private readonly string? _selectedItemPath;
+
+		private bool _isIconChanged;
+
+		public readonly bool IsShortcut;
+
+		public ObservableCollection<IconFileInfo> DllIcons { get; } = [];
+
+		private string? _IconResourceItemPath;
+		public string? IconResourceItemPath
+		{
+			get => _IconResourceItemPath;
+			set
+			{
+				if (SetProperty(ref _IconResourceItemPath, value))
+				{
+					DllIcons.Clear();
+
+					if (IsConvertibleImagePath(_IconResourceItemPath))
+					{
+						ConvertImageInfoBarSeverity = InfoBarSeverity.Informational;
+						ConvertImageInfoBarMessage = Strings.ConvertToIconRequiredMessage.GetLocalizedResource();
+						IsConvertImageInfoBarOpen = true;
+						return;
+					}
+
+					IsConvertImageInfoBarOpen = false;
+
+					if (Path.Exists(_IconResourceItemPath))
+					{
+						var icons = Win32Helper.ExtractIconsFromDLL(_IconResourceItemPath);
+						if (icons?.Count is null or 0)
+							return;
+
+						foreach (var item in icons)
+							DllIcons.Add(item);
+					}
+				}
+			}
+		}
+
+		private IconFileInfo? _SelectedDllIcon;
+		public IconFileInfo? SelectedDllIcon
+		{
+			get => _SelectedDllIcon;
+			set
+			{
+				if (SetProperty(ref _SelectedDllIcon, value))
+					_isIconChanged = true;
+			}
+		}
+
+		[ObservableProperty] public partial bool IsConvertImageInfoBarOpen { get; set; }
+		[ObservableProperty] public partial InfoBarSeverity ConvertImageInfoBarSeverity { get; set; }
+		[ObservableProperty] public partial string? ConvertImageInfoBarMessage { get; set; }
+
+		public ICommand? RestoreDefaultIconCommand { get; private set; }
+		public ICommand? OpenFilePickerCommand { get; private set; }
+		public ICommand? ConvertImageToIconCommand { get; private set; }
+
+		public CustomizationViewModel(IShellPage appInstance, BaseProperties baseProperties, AppWindow appWindow)
+		{
+			ListedItem? item;
 			if (baseProperties is FileProperties fileProperties)
 				item = fileProperties.Item;
 			else if (baseProperties is FolderProperties folderProperties)
@@ -28,151 +87,112 @@ namespace Files.App.ViewModels.Properties
 			else
 				return;
 
-			AppInstance = appInstance;
-			IconResourceItemPath = Path.Combine(CommonPaths.SystemRootPath, "System32", "SHELL32.dll");
+			_appInstance = appInstance;
+			_appWindow = appWindow;
+			IconResourceItemPath = DefaultIconDllFilePath;
 			IsShortcut = item.IsShortcut;
-			SelectedItemPath = item.ItemPath;
+			_selectedItemPath = item.ItemPath;
 
-			_dllIcons = new();
-			DllIcons = new(_dllIcons);
 
-			// Get default
-			LoadIconsForPath(IconResourceItemPath);
-
-			RestoreDefaultIconCommand = new AsyncRelayCommand(ExecuteRestoreDefaultIconAsync);
-			PickDllFileCommand = new AsyncRelayCommand<XamlRoot>(ExecuteOpenFilePickerAsync);
+			RestoreDefaultIconCommand = new RelayCommand(ExecuteRestoreDefaultIconCommand);
+			OpenFilePickerCommand = new RelayCommand(ExecuteOpenFilePickerCommand);
+			ConvertImageToIconCommand = new AsyncRelayCommand(ExecuteConvertImageToIconCommandAsync);
 		}
 
-		private string? _selectedItemPath;
-		public string? SelectedItemPath
+		private static bool IsConvertibleImagePath(string? path)
 		{
-			get => _selectedItemPath;
-			set => SetProperty(ref _selectedItemPath, value);
+			return FileExtensionHelpers.IsConvertibleToIcoFile(path) && File.Exists(path);
 		}
 
-		private string? _iconResourceItemPath;
-		public string? IconResourceItemPath
+		private void ExecuteRestoreDefaultIconCommand()
 		{
-			get => _iconResourceItemPath;
-			set => SetProperty(ref _iconResourceItemPath, value);
+			SelectedDllIcon = null;
+			_isIconChanged = true;
 		}
 
-		private IShellPage? _appInstance;
-		private IShellPage? AppInstance
+		private void ExecuteOpenFilePickerCommand()
 		{
-			get => _appInstance;
-			set => SetProperty(ref _appInstance, value);
+			var parentWindowId = (_appWindow
+				?? throw new InvalidOperationException("The customization window has not been initialized.")).Id;
+			var hWnd = Microsoft.UI.Win32Interop.GetWindowFromWindowId(parentWindowId);
+
+			string[] extensions =
+			[
+				Strings.AllSupportedFiles.GetLocalizedResource(), "*.dll;*.exe;*.ico;*.icl;*.png;*.bmp;*.jpg;*.jpeg;*.jfif",
+				Strings.IconFiles.GetLocalizedResource(), "*.dll;*.exe;*.ico;*.icl",
+				Strings.ApplicationExtension.GetLocalizedResource(), "*.dll",
+				Strings.Application.GetLocalizedResource(), "*.exe",
+				Strings.IcoFileCapitalized.GetLocalizedResource(), "*.ico",
+				Strings.IclFileCapitalized.GetLocalizedResource(), "*.icl ",
+				Strings.ImageFiles.GetLocalizedResource(), "*.png;*.bmp;*.jpg;*.jpeg;*.jfif",
+			];
+
+			var result = CommonDialogService.Open_FileOpenDialog(hWnd, false, extensions, Environment.SpecialFolder.MyComputer, out var filePath);
+			if (result)
+				IconResourceItemPath = filePath;
 		}
 
-		private bool _isShortcut;
-		public bool IsShortcut
+		private async Task ExecuteConvertImageToIconCommandAsync()
 		{
-			get => _isShortcut;
-			private set => SetProperty(ref _isShortcut, value);
-		}
+			var imagePath = IconResourceItemPath;
+			if (imagePath is null || !IsConvertibleImagePath(imagePath))
+				return;
 
-		private bool _restoreButtonIsEnabled = true;
-		public bool RestoreButtonIsEnabled
-		{
-			get => _restoreButtonIsEnabled;
-			private set => SetProperty(ref _restoreButtonIsEnabled, value);
-		}
+			var appWindow = _appWindow
+				?? throw new InvalidOperationException("The customization window has not been initialized.");
+			var hWnd = Microsoft.UI.Win32Interop.GetWindowFromWindowId(appWindow.Id);
+			if (!CommonDialogService.Open_FileSaveDialog(hWnd, false, [Strings.IcoFileCapitalized.GetLocalizedResource(), "*.ico"], Environment.SpecialFolder.MyPictures, out var icoFilePath))
+				return;
 
-		private readonly ObservableCollection<IconFileInfo> _dllIcons;
-		public ReadOnlyObservableCollection<IconFileInfo> DllIcons { get; }
+			// The save dialog doesn't enforce an extension, and the shell only accepts real .ico files here
+			if (!Path.GetExtension(icoFilePath).Equals(".ico", StringComparison.OrdinalIgnoreCase))
+				icoFilePath += ".ico";
 
-		private IconFileInfo _SelectedDllIcon;
-		public IconFileInfo SelectedDllIcon
-		{
-			get => _SelectedDllIcon;
-			set
+			var converted = await Task.Run(() => Win32Helper.ConvertImageToIcoFile(imagePath, icoFilePath));
+			if (converted)
 			{
-				if (value is not null && SetProperty(ref _SelectedDllIcon, value))
-				{
-					ChangeIcon(value);
-				}
+				IconResourceItemPath = icoFilePath;
+				SelectedDllIcon = DllIcons.FirstOrDefault();
+			}
+			else
+			{
+				ConvertImageInfoBarSeverity = InfoBarSeverity.Error;
+				ConvertImageInfoBarMessage = Strings.ConvertToIconError.GetLocalizedResource();
+				IsConvertImageInfoBarOpen = true;
 			}
 		}
 
-		public IAsyncRelayCommand RestoreDefaultIconCommand { get; private set; }
-		public IAsyncRelayCommand<XamlRoot> PickDllFileCommand { get; private set; }
-
-		private async Task ExecuteRestoreDefaultIconAsync()
+		public async Task<bool> UpdateIcon()
 		{
-			RestoreButtonIsEnabled = false;
+			if (!_isIconChanged)
+				return false;
 
-			var setIconResult = IsShortcut
-				? Win32API.SetCustomFileIcon(SelectedItemPath, null)
-				: Win32API.SetCustomDirectoryIcon(SelectedItemPath, null);
+			var selectedItemPath = _selectedItemPath
+				?? throw new InvalidOperationException("The selected item path has not been initialized.");
+			bool result = false;
 
-			if (setIconResult)
+			if (SelectedDllIcon is null)
 			{
-				await App.Window.DispatcherQueue.EnqueueAsync(() =>
-				{
-					AppInstance?.FilesystemViewModel?.RefreshItems(null, async () =>
-					{
-						await App.Window.DispatcherQueue.EnqueueAsync(() => RestoreButtonIsEnabled = true);
-						
-					});
-				});
+				result = IsShortcut
+					? Win32Helper.SetCustomFileIcon(selectedItemPath, null)
+					: Win32Helper.SetCustomDirectoryIcon(selectedItemPath, null);
 			}
-		}
-
-		private async Task ExecuteOpenFilePickerAsync(XamlRoot? xamlRoot)
-		{
-			if (xamlRoot is null)
-				return;
-
-			// Initialize picker
-			FileOpenPicker picker = new()
+			else
 			{
-				SuggestedStartLocation = PickerLocationId.ComputerFolder,
-				ViewMode = PickerViewMode.Thumbnail,
-			};
-
-			picker.FileTypeFilter.Add(".dll");
-			picker.FileTypeFilter.Add(".exe");
-			picker.FileTypeFilter.Add(".ico");
-
-			// WINUI3: Create and initialize new window
-			var parentWindowId = ((MainPropertiesPage)((Frame)xamlRoot.Content).Content).AppWindow.Id;
-			var handle = Microsoft.UI.Win32Interop.GetWindowFromWindowId(parentWindowId);
-			WinRT.Interop.InitializeWithWindow.Initialize(picker, handle);
-
-			// Open picker
-			var file = await picker.PickSingleFileAsync();
-			if (file is null)
-				return;
-
-			LoadIconsForPath(file.Path);
-		}
-
-		private async Task ChangeIcon(IconFileInfo selectedIconInfo)
-		{
-			var setIconResult = IsShortcut
-				? Win32API.SetCustomFileIcon(SelectedItemPath, IconResourceItemPath, selectedIconInfo.Index)
-				: Win32API.SetCustomDirectoryIcon(SelectedItemPath, IconResourceItemPath, selectedIconInfo.Index);
-
-			if (setIconResult)
-			{
-				await App.Window.DispatcherQueue.EnqueueAsync(() =>
-				{
-					AppInstance?.FilesystemViewModel?.RefreshItems(null);
-				});
+				result = IsShortcut
+					? Win32Helper.SetCustomFileIcon(selectedItemPath, IconResourceItemPath, SelectedDllIcon.Index)
+					: Win32Helper.SetCustomDirectoryIcon(selectedItemPath, IconResourceItemPath, SelectedDllIcon.Index);
 			}
-		}
 
-		private void LoadIconsForPath(string path)
-		{
-			IconResourceItemPath = path;
-			_dllIcons.Clear();
+			if (!result)
+				return false;
 
-			var icons = Win32API.ExtractIconsFromDLL(path);
-			if (icons?.Count is null or 0)
-				return;
+			await MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(() =>
+			{
+				_appInstance?.ShellViewModel?.RefreshItems(null);
+			});
 
-			foreach(var item in icons)
-				_dllIcons.Add(item);
+			return true;
 		}
 	}
 }

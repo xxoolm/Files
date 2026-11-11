@@ -1,5 +1,6 @@
-using CommunityToolkit.WinUI.Helpers;
-using System;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using System.Globalization;
 using Windows.UI;
 
@@ -76,14 +77,9 @@ namespace Files.App.Helpers
 			return color.ToHex();
 		}
 
-		public static Windows.UI.Color ToWindowsColor(this System.Drawing.Color color)
+		private static string ToHex(this Color color)
 		{
-			return Windows.UI.Color.FromArgb(color.A, color.R, color.G, color.B);
-		}
-
-		public static System.Drawing.Color FromWindowsColor(this Windows.UI.Color color)
-		{
-			return System.Drawing.Color.FromArgb(color.ToInt());
+			return $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
 		}
 	}
 }

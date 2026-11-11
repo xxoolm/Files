@@ -1,14 +1,21 @@
-using Files.App.ViewModels.Dialogs;
-using Files.Backend.ViewModels.Dialogs;
-using Files.Shared.Enums;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using System;
-using System.Threading.Tasks;
+using Microsoft.UI.Xaml.Data;
+using WinRT;
 
 namespace Files.App.Dialogs
 {
 	public sealed partial class CreateShortcutDialog : ContentDialog, IDialog<CreateShortcutDialogViewModel>
 	{
+		private FrameworkElement RootAppElement
+		{
+			[DynamicWindowsRuntimeCast(typeof(FrameworkElement))]
+			get => (FrameworkElement)MainWindow.Instance.Content;
+		}
+
 		public CreateShortcutDialogViewModel ViewModel
 		{
 			get => (CreateShortcutDialogViewModel)DataContext;
@@ -18,8 +25,23 @@ namespace Files.App.Dialogs
 		public CreateShortcutDialog()
 		{
 			InitializeComponent();
+			this.Closing += CreateShortcutDialog_Closing;
+
+			InvalidPathWarning.SetBinding(TeachingTip.TargetProperty, new Binding()
+			{
+				Source = ShortcutTarget
+			});
 		}
 
-		public new async Task<DialogResult> ShowAsync() => (DialogResult)await base.ShowAsync();
+		private void CreateShortcutDialog_Closing(ContentDialog sender, ContentDialogClosingEventArgs args)
+		{
+			this.Closing -= CreateShortcutDialog_Closing;
+			InvalidPathWarning.IsOpen = false;
+		}
+
+		public new async Task<DialogResult> ShowAsync()
+		{
+			return (DialogResult)await base.ShowAsync();
+		}
 	}
 }

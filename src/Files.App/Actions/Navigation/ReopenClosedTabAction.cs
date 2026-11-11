@@ -1,39 +1,42 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.UserControls.MultitaskingControl;
-using System.ComponentModel;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class ReopenClosedTabAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class ReopenClosedTabAction : ObservableObject, IAction
 	{
-		private readonly IMultitaskingContext context = Ioc.Default.GetRequiredService<IMultitaskingContext>();
+		private readonly IMultitaskingContext context;
 
-		public string Label { get; } = "ReopenClosedTab".GetLocalizedResource();
+		public string Label
+			=> Strings.ReopenClosedTab.GetLocalizedResource();
 
-		public string Description { get; } = "TODO: Need to be described";
+		public string Description
+			=> Strings.ReopenClosedTabDescription.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.T, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift);
+		public ActionCategory Category
+			=> ActionCategory.Navigation;
+
+		public HotKey HotKey
+			=> new(Keys.T, KeyModifiers.CtrlShift);
 
 		public bool IsExecutable =>
 			context.Control is not null &&
-			!BaseMultitaskingControl.IsRestoringClosedTab &&
-			BaseMultitaskingControl.RecentlyClosedTabs.Count > 0;
+			!BaseTabBar.IsRestoringClosedTab &&
+			BaseTabBar.RecentlyClosedTabs.Count > 0;
 
 		public ReopenClosedTabAction()
 		{
+			context = Ioc.Default.GetRequiredService<IMultitaskingContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
-			BaseMultitaskingControl.StaticPropertyChanged += BaseMultitaskingControl_StaticPropertyChanged;
+			BaseTabBar.StaticPropertyChanged += BaseMultitaskingControl_StaticPropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
-			context.Control!.ReopenClosedTab();
+			context.Control!.ReopenClosedTabAsync();
+
 			return Task.CompletedTask;
 		}
 

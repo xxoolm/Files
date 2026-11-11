@@ -1,0 +1,64 @@
+﻿<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <Sdk Name="PublishWithSatoriGC" Version="10.0.15-satori.42242472690.2" />
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <DefaultLanguage>en-US</DefaultLanguage>
+        <AppxBundleAutoResourcePackageQualifiers>Scale|DXFeatureLevel</AppxBundleAutoResourcePackageQualifiers>
+        <AppxDefaultResourceQualifiers>Language=en-US;af;ar;be-BY;bg;ca;cs-CZ;da;de-DE;el;en-GB;es-ES;es-419;fa-IR;fi-FI;fil-PH;fr-FR;he-IL;hi-IN;hr-HR;hu-HU;hy-AM;id-ID;it-IT;ja-JP;ka;km-KH;ko-KR;lt-LT;lv-LV;ms-MY;nb-NO;nl-NL;pl-PL;pt-BR;pt-PT;ro-RO;ru-RU;sk-SK;sq-AL;sr-Cyrl;sv-SE;ta;th-TH;tr-TR;uk-UA;vi;zh-Hans;zh-Hant</AppxDefaultResourceQualifiers>
+        <TargetFramework>$(WindowsTargetFramework)</TargetFramework>
+        <TargetPlatformMinVersion>$(MinimalWindowsVersion)</TargetPlatformMinVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <Configurations>Debug;Release</Configurations>
+        <Platforms>x86;x64;arm64</Platforms>
+        <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+        <RuntimeIdentifier>win-$(Platform)</RuntimeIdentifier>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <CsWinRTComponent>true</CsWinRTComponent>
+        <CsWinRTWindowsMetadata>$(TargetWindowsVersion)</CsWinRTWindowsMetadata>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <CsWinRTEnableLogging>true</CsWinRTEnableLogging>
+        <IsAotCompatible>true</IsAotCompatible>
+        <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
+        <PublishAot>true</PublishAot>
+        <SelfContained>true</SelfContained>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <MSBuildWarningsNotAsErrors>$(MSBuildWarningsNotAsErrors);SATORI001;SATORI002</MSBuildWarningsNotAsErrors>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Manifest Include="app.manifest" />
+        <DirectPInvoke Include="ADVAPI32" />
+        <DirectPInvoke Include="CFGMGR32" />
+        <DirectPInvoke Include="USER32" />
+        <DirectPInvoke Include="GDI32" />
+        <DirectPInvoke Include="KERNEL32" />
+        <DirectPInvoke Include="OLE32" />
+        <DirectPInvoke Include="SHELL32" />
+        <NativeLibrary Include="shell32.lib" />
+        <NativeLibrary Include="cfgmgr32.lib" />
+        <NativeLibrary Include="gdi32.lib" />
+        <TrimmerRootAssembly Include="Files.App.Server" />
+        <PackageReference Include="Microsoft.Windows.CsWinRT" />
+        <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+        <PackageReference Include="SQLitePCLRaw.provider.winsqlite3" />
+        <PackageReference Include="System.Drawing.Common" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\Files.App.Server.winmd">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>Files.App.Server.winmd</Link>
+            <Visible>false</Visible>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Files.Storage\Files.Storage.csproj" />
+        <ProjectReference Include="..\Files.Shared\Files.Shared.csproj" />
+    </ItemGroup>
+
+</Project>

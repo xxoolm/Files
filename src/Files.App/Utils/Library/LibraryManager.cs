@@ -1,0 +1,381 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Files.App.Dialogs;
+using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml.Controls;
+using System.Collections.Specialized;
+using System.Diagnostics.CodeAnalysis;
+using System.IO;
+using Windows.System;
+using Windows.Win32;
+using Windows.Win32.UI.Shell;
+using Visibility = Microsoft.UI.Xaml.Visibility;
+
+namespace Files.App.Utils.Library
+{
+	public sealed partial class LibraryManager : IDisposable
+	{
+		public EventHandler<NotifyCollectionChangedEventArgs>? DataChanged;
+
+		private readonly List<LibraryLocationItem> libraries = [];
+		private int refreshVersion;
+		private static readonly Lazy<LibraryManager> lazy = new(() => new LibraryManager());
+
+		public static LibraryManager Default
+			=> lazy.Value;
+
+		public IReadOnlyList<LibraryLocationItem> Libraries
+		{
+			get
+			{
+				lock (libraries)
+				{
+					return libraries.ToList().AsReadOnly();
+				}
+			}
+		}
+
+		public LibraryManager()
+		{
+			InitializeWatcher();
+		}
+
+		private void InitializeWatcher() => App.ServerChanged += OnServerChanged;
+
+		private async void OnServerChanged(object? sender, string name)
+		{
+			if (name == ServerChangeNames.Libraries)
+				await SafetyExtensions.IgnoreExceptions(UpdateLibrariesAsync, App.Logger);
+		}
+
+		/// <summary>
+		/// Gets the current user's libraries from the server cache.
+		/// </summary>
+		/// <returns>List of library items</returns>
+		public static async Task<List<LibraryLocationItem>> ListUserLibraries()
+		{
+			try
+			{
+				var libraries = await Server.LocationService.GetLibrariesAsync();
+				return libraries.Select(library => new LibraryLocationItem(new ShellLibraryItem
+				{
+					FullPath = library.FullPath,
+					AbsolutePath = library.AbsolutePath,
+					RelativePath = library.RelativePath,
+					DisplayName = library.DisplayName,
+					IsPinned = library.IsPinned,
+					DefaultSaveFolder = library.DefaultSaveFolder,
+					Folders = library.Folders,
+				})).ToList();
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogWarning(ex, "Could not load libraries from the background server.");
+				return [];
+			}
+		}
+
+		public async Task UpdateLibrariesAsync()
+		{
+			var version = Interlocked.Increment(ref refreshVersion);
+			var items = await ListUserLibraries();
+			items.Sort();
+			var replacements = new List<NotifyCollectionChangedEventArgs>();
+			lock (libraries)
+			{
+				if (version != refreshVersion)
+					return;
+				for (int index = 0; index < items.Count; index++)
+				{
+					var item = items[index];
+					var previous = libraries.FirstOrDefault(library => string.Equals(library.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+					if (previous is null)
+						continue;
+					if (previous.Text == item.Text && previous.IsDefaultLocation == item.IsDefaultLocation &&
+						string.Equals(previous.DefaultSaveFolder, item.DefaultSaveFolder, StringComparison.OrdinalIgnoreCase) &&
+						previous.Folders.SequenceEqual(item.Folders, StringComparer.OrdinalIgnoreCase))
+					{
+						items[index] = previous;
+					}
+					else
+					{
+						replacements.Add(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, item, previous));
+					}
+				}
+				libraries.Clear();
+				libraries.AddRange(items);
+			}
+			foreach (var replacement in replacements)
+				DataChanged?.Invoke(SectionType.Library, replacement);
+			DataChanged?.Invoke(SectionType.Library, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+		}
+
+		public bool TryGetLibrary(string? path, [NotNullWhen(true)] out LibraryLocationItem? library)
+		{
+			if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(ShellLibraryItem.EXTENSION, StringComparison.OrdinalIgnoreCase))
+			{
+				library = null;
+				return false;
+			}
+			library = Libraries.FirstOrDefault(l => string.Equals(path, l.Path, StringComparison.OrdinalIgnoreCase));
+			return library is not null;
+		}
+
+		/// <summary>
+		/// Create a new library with the specified name.
+		/// </summary>
+		/// <param name="name">The name of the new library (must be unique)</param>
+		/// <returns>The new library if successfully created</returns>
+		public async Task<bool> CreateNewLibrary(string name)
+		{
+			if (string.IsNullOrWhiteSpace(name) || !CanCreateLibrary(name).result)
+				return false;
+
+			var shellLibrary = await STATask.Run(() =>
+			{
+				try
+				{
+					using var library = new ShellLibraryEx(name, PInvoke.FOLDERID_Libraries, false);
+					library.Folders.Add(ShellItem.Open(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments))); // Add default folder so it's not empty
+					library.Commit();
+					library.Reload();
+					var libraryPath = library.GetDisplayName(SIGDN.SIGDN_DESKTOPABSOLUTEPARSING);
+					return Task.FromResult(libraryPath is null
+						? null
+						: ShellFolderExtensions.GetShellLibraryItem(library, libraryPath));
+				}
+				catch (Exception e)
+				{
+					App.Logger.LogWarning(e, null);
+				}
+
+				return Task.FromResult<ShellLibraryItem?>(null);
+			}, App.Logger);
+
+			if (shellLibrary is null)
+				return false;
+
+			var newLib = new LibraryLocationItem(shellLibrary);
+			lock (libraries)
+			{
+				libraries.Add(newLib);
+			}
+			DataChanged?.Invoke(SectionType.Library, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, newLib));
+			return true;
+		}
+
+		/// <summary>
+		/// Update library details.
+		/// </summary>
+		/// <param name="libraryFilePath">Library file path</param>
+		/// <param name="defaultSaveFolder">Update the default save folder or null to keep current</param>
+		/// <param name="folders">Update the library folders or null to keep current</param>
+		/// <param name="isPinned">Update the library pinned status or null to keep current</param>
+		/// <returns>The new library if successfully updated</returns>
+		public async Task<LibraryLocationItem?> UpdateLibrary(string libraryPath, string? defaultSaveFolder = null, string[]? folders = null, bool? isPinned = null)
+		{
+			if (string.IsNullOrWhiteSpace(libraryPath) || (defaultSaveFolder is null && folders is null && isPinned is null))
+				// Nothing to update
+				return null;
+
+			var item = await STATask.Run(() =>
+			{
+				try
+				{
+					bool updated = false;
+					using var libraryFile = ShellItem.Open(libraryPath);
+					using var library = new ShellLibraryEx(libraryFile.IShellItem, false);
+					if (folders is not null)
+					{
+						if (folders.Length > 0)
+						{
+							var foldersToRemove = library.Folders
+								.Where(f => !folders.Any(folderPath => string.Equals(folderPath, f.FileSystemPath, StringComparison.OrdinalIgnoreCase)))
+								.ToList();
+							foreach (var toRemove in foldersToRemove)
+							{
+								if (library.Folders.Remove(toRemove))
+								{
+									toRemove.Dispose();
+									updated = true;
+								}
+							}
+							var foldersToAdd = folders.Distinct(StringComparer.OrdinalIgnoreCase)
+													  .Where(folderPath => !library.Folders.Any(f => string.Equals(folderPath, f.FileSystemPath, StringComparison.OrdinalIgnoreCase)))
+													  .Select(ShellItem.Open)
+													  .ToList();
+							foreach (var toAdd in foldersToAdd)
+							{
+								library.Folders.Add(toAdd);
+								updated = true;
+							}
+							foreach (var toAdd in foldersToAdd)
+							{
+								toAdd.Dispose();
+							}
+						}
+					}
+					if (defaultSaveFolder is not null)
+					{
+						using var saveFolder = ShellItem.Open(defaultSaveFolder);
+						library.DefaultSaveFolder = saveFolder;
+						updated = true;
+					}
+					if (isPinned is not null)
+					{
+						library.PinnedToNavigationPane = isPinned == true;
+						updated = true;
+					}
+					if (updated)
+					{
+						library.Commit();
+						library.Reload(); // Reload folders list
+						return Task.FromResult<ShellLibraryItem?>(ShellFolderExtensions.GetShellLibraryItem(library, libraryPath));
+					}
+				}
+				catch (Exception e)
+				{
+					App.Logger.LogWarning(e, null);
+				}
+
+				return Task.FromResult<ShellLibraryItem?>(null);
+			}, App.Logger);
+
+			var newLib = item is not null ? new LibraryLocationItem(item) : null;
+			if (newLib is not null)
+			{
+				var libItem = Libraries.FirstOrDefault(l => string.Equals(l.Path, libraryPath, StringComparison.OrdinalIgnoreCase));
+				if (libItem is not null)
+				{
+					lock (libraries)
+					{
+						libraries[libraries.IndexOf(libItem)] = newLib;
+					}
+					DataChanged?.Invoke(SectionType.Library, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, newLib, libItem));
+				}
+				return newLib;
+			}
+			return null;
+		}
+
+		public (bool result, string reason) CanCreateLibrary(string name)
+		{
+			if (string.IsNullOrWhiteSpace(name))
+			{
+				return (false, Strings.ErrorInputEmpty.GetLocalizedResource());
+			}
+			if (FilesystemHelpers.ContainsRestrictedCharacters(name))
+			{
+				return (false, Strings.ErrorNameInputRestrictedCharacters.GetLocalizedResource());
+			}
+			if (FilesystemHelpers.ContainsRestrictedFileName(name))
+			{
+				return (false, Strings.ErrorNameInputRestricted.GetLocalizedResource());
+			}
+			if (Libraries.Any((item) => string.Equals(name, item.Text, StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(name, Path.GetFileNameWithoutExtension(item.Path), StringComparison.OrdinalIgnoreCase)))
+			{
+				return (false, Strings.CreateLibraryErrorAlreadyExists.GetLocalizedResource());
+			}
+			return (true, string.Empty);
+		}
+
+		public static async Task ShowRestoreDefaultLibrariesDialogAsync()
+		{
+			var dialog = new DynamicDialog(new DynamicDialogViewModel
+			{
+				TitleText = Strings.DialogRestoreLibrariesTitleText.GetLocalizedResource(),
+				SubtitleText = Strings.DialogRestoreLibrariesSubtitleText.GetLocalizedResource(),
+				PrimaryButtonText = Strings.Restore.GetLocalizedResource(),
+				CloseButtonText = Strings.Cancel.GetLocalizedResource(),
+				PrimaryButtonAction = async (vm, e) =>
+				{
+					await ContextMenu.InvokeVerb("restorelibraries", ShellLibraryItem.LibrariesPath);
+					await App.LibraryManager.UpdateLibrariesAsync();
+				},
+				CloseButtonAction = (vm, e) => vm.Hide(),
+				KeyDownAction = (vm, e) =>
+				{
+					if (e.Key == VirtualKey.Escape)
+					{
+						vm.Hide();
+					}
+				},
+				DynamicButtons = DynamicDialogButtons.Primary | DynamicDialogButtons.Cancel
+			});
+			await dialog.ShowAsync();
+		}
+
+		public static async Task ShowCreateNewLibraryDialogAsync()
+		{
+			var inputText = new TextBox
+			{
+				PlaceholderText = Strings.FolderWidgetCreateNewLibraryInputPlaceholderText.GetLocalizedResource()
+			};
+			var tipText = new TextBlock
+			{
+				Text = string.Empty,
+				Visibility = Visibility.Collapsed
+			};
+
+			var dialog = new DynamicDialog(new DynamicDialogViewModel
+			{
+				DisplayControl = new Grid
+				{
+					Children =
+					{
+						new StackPanel
+						{
+							Spacing = 4d,
+							Children =
+							{
+								inputText,
+								tipText
+							}
+						}
+					}
+				},
+				TitleText = Strings.FolderWidgetCreateNewLibraryDialogTitleText.GetLocalizedResource(),
+				SubtitleText = Strings.SideBarCreateNewLibraryText.GetLocalizedResource(),
+				PrimaryButtonText = Strings.Create.GetLocalizedResource(),
+				CloseButtonText = Strings.Cancel.GetLocalizedResource(),
+				PrimaryButtonAction = async (vm, e) =>
+				{
+					var (result, reason) = App.LibraryManager.CanCreateLibrary(inputText.Text);
+					tipText.Text = reason;
+					tipText.Visibility = result ? Visibility.Collapsed : Visibility.Visible;
+					if (!result)
+					{
+						e.Cancel = true;
+						return;
+					}
+					await App.LibraryManager.CreateNewLibrary(inputText.Text);
+				},
+				CloseButtonAction = (vm, e) =>
+				{
+					vm.Hide();
+				},
+				KeyDownAction = async (vm, e) =>
+				{
+					if (e.Key == VirtualKey.Enter)
+					{
+						await App.LibraryManager.CreateNewLibrary(inputText.Text);
+					}
+					else if (e.Key == VirtualKey.Escape)
+					{
+						vm.Hide();
+					}
+				},
+				DynamicButtons = DynamicDialogButtons.Primary | DynamicDialogButtons.Cancel
+			});
+			await dialog.ShowAsync();
+		}
+
+		public static bool IsLibraryPath(string path)
+			=> !string.IsNullOrEmpty(path) && path.EndsWith(ShellLibraryItem.EXTENSION, StringComparison.OrdinalIgnoreCase);
+
+		public void Dispose()
+			=> App.ServerChanged -= OnServerChanged;
+	}
+}

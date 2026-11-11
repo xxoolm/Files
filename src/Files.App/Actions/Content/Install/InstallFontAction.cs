@@ -1,38 +1,55 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using Files.App.Shell;
-using Files.Backend.Helpers;
-using System.Linq;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Files.Shared.Helpers;
 
 namespace Files.App.Actions
 {
-	internal class InstallFontAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class InstallFontAction : ObservableObject, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
+		private static readonly StatusCenterViewModel StatusCenterViewModel = Ioc.Default.GetRequiredService<StatusCenterViewModel>();
 
-		public string Label => "Install".GetLocalizedResource();
+		public string Label
+			=> Strings.InstallFont.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.InstallFontDescription.GetLocalizedFormatResource(context.SelectedItems.Count);
 
-		public bool IsExecutable => context.SelectedItems.Any() &&
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.Actions.FontInstall");
+
+		public ActionCategory Category
+			=> ActionCategory.Install;
+
+		public bool IsExecutable =>
+			context.SelectedItems.Any() &&
 			context.SelectedItems.All(x => FileExtensionHelpers.IsFontFile(x.FileExtension)) &&
-			context.PageType is not ContentPageTypes.RecycleBin and not ContentPageTypes.ZipFolder;
+			context.PageType != ContentPageTypes.RecycleBin &&
+			context.PageType != ContentPageTypes.ZipFolder;
 
 		public InstallFontAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public async Task ExecuteAsync(object? parameter = null)
 		{
-			foreach (ListedItem selectedItem in context.SelectedItems)
-				Win32API.InstallFont(selectedItem.ItemPath, false);
+			if (context.ShellPage?.ShellViewModel?.WorkingDirectory is not { } workingDirectory)
+				return;
 
-			return Task.CompletedTask;
+			var banner = StatusCenterHelper.AddCard_InstallFont(workingDirectory.CreateEnumerable(), ReturnResult.InProgress, context.SelectedItems.Count);
+			banner.IsCancelable = false;
+
+			var paths = context.SelectedItems.Select(item => item.ItemPath!).ToArray();
+			await Win32Helper.InstallFontsAsync(paths, false);
+
+			StatusCenterViewModel.RemoveItem(banner);
+			var currentWorkingDirectory = context.ShellPage.GetRequiredShellViewModel().WorkingDirectory!;
+			StatusCenterHelper.AddCard_InstallFont(currentWorkingDirectory.CreateEnumerable(), ReturnResult.Success, context.SelectedItems.Count);
 		}
 
 		public void Context_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

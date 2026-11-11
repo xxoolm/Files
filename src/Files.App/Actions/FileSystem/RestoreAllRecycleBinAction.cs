@@ -1,54 +1,70 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using System.ComponentModel;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Microsoft.UI.Xaml.Controls;
+using Windows.Foundation.Metadata;
 
 namespace Files.App.Actions
 {
-	internal class RestoreAllRecycleBinAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class RestoreAllRecycleBinAction : BaseUIAction, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IStorageTrashBinService StorageTrashBinService = Ioc.Default.GetRequiredService<IStorageTrashBinService>();
 
-		public string Label { get; } = "RestoreAllItems".GetLocalizedResource();
+		public string Label
+			=> Strings.RestoreAllItems.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.RestoreAllRecycleBinDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new RichGlyph(opacityStyle: "ColorIconRestoreItem");
+		public ActionCategory Category
+			=> ActionCategory.FileSystem;
 
-		public bool IsExecutable
-		{
-			get
-			{
-				if (context.PageType is ContentPageTypes.RecycleBin)
-					return context.HasItem;
-				return RecycleBinHelpers.RecycleBinHasItems();
-			}
-		}
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.RestoreDeleted");
+
+		public override bool IsExecutable =>
+			UIHelpers.CanShowDialog &&
+			StorageTrashBinService.HasItems();
 
 		public RestoreAllRecycleBinAction()
 		{
-			context.PropertyChanged += Context_PropertyChanged;
+			StorageTrashBinService.StateChanged += (_, _) => OnPropertyChanged(nameof(IsExecutable));
 		}
 
-		public async Task ExecuteAsync()
+		public async Task ExecuteAsync(object? parameter = null)
 		{
-			if (context.ShellPage is not null)
-				await RecycleBinHelpers.RestoreRecycleBin(context.ShellPage);
-		}
-
-		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
-		{
-			switch (e.PropertyName)
+			// TODO: Use AppDialogService
+			var confirmationDialog = new ContentDialog()
 			{
-				case nameof(IContentPageContext.PageType):
-				case nameof(IContentPageContext.HasItem):
-					if (context.PageType is ContentPageTypes.RecycleBin)
-						OnPropertyChanged(nameof(IsExecutable));
-					break;
+				Title = Strings.ConfirmRestoreBinDialogTitle.GetLocalizedResource(),
+				Content = Strings.ConfirmRestoreBinDialogContent.GetLocalizedResource(),
+				PrimaryButtonText = Strings.Yes.GetLocalizedResource(),
+				SecondaryButtonText = Strings.Cancel.GetLocalizedResource(),
+				DefaultButton = ContentDialogButton.Primary
+			};
+
+			if (ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
+				confirmationDialog.XamlRoot = MainWindow.Instance.Content.XamlRoot;
+
+			if (await confirmationDialog.TryShowAsync() is not ContentDialogResult.Primary)
+				return;
+
+			bool result = await StorageTrashBinService.RestoreAllTrashesAsync();
+
+			// Show error dialog when failed
+			if (!result)
+			{
+				var errorDialog = new ContentDialog()
+				{
+					Title = Strings.FailedToRestore.GetLocalizedResource(),
+					PrimaryButtonText = Strings.OK.GetLocalizedResource(),
+				};
+
+				if (ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
+					errorDialog.XamlRoot = MainWindow.Instance.Content.XamlRoot;
+
+				await errorDialog.TryShowAsync();
 			}
 		}
 	}

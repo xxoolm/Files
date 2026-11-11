@@ -1,26 +1,43 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using Files.Shared.Enums;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SetAsWallpaperBackgroundAction : BaseSetAsAction
+	[GeneratedRichCommand]
+	internal sealed partial class SetAsWallpaperBackgroundAction : BaseSetAsAction
 	{
-		public override string Label { get; } = "SetAsBackground".GetLocalizedResource();
+		public override string Label
+			=> Strings.Desktop.GetLocalizedResource();
 
-		public override string Description => "TODO: Need to be described.";
+		public override string ExtendedLabel
+			=> Strings.SetAsBackground.GetLocalizedResource();
 
-		public override RichGlyph Glyph { get; } = new("\uE91B");
+		public override string Description
+			=> Strings.SetAsWallpaperBackgroundDescription.GetLocalizedResource();
 
-		public override bool IsExecutable => base.IsExecutable &&
-			context.SelectedItem is not null;
+		public string AccessKey
+			=> "W";
 
-		public override Task ExecuteAsync()
+		public override RichGlyph Glyph
+			=> new("\uE91B");
+
+		public override bool IsExecutable =>
+			base.IsExecutable &&
+			ContentPageContext.SelectedItem is not null;
+
+		public override Task ExecuteAsync(object? parameter = null)
 		{
-			if (context.SelectedItem is not null)
-				WallpaperHelpers.SetAsBackground(WallpaperType.Desktop, context.SelectedItem.ItemPath);
+			if (!IsExecutable || ContentPageContext.SelectedItem is not ListedItem selectedItem)
+				return Task.CompletedTask;
+
+			try
+			{
+				WindowsWallpaperService.SetDesktopWallpaper(selectedItem.ItemPath!);
+			}
+			catch (Exception ex)
+			{
+				ShowErrorDialog(ex.Message);
+			}
 
 			return Task.CompletedTask;
 		}

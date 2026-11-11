@@ -1,10 +1,7 @@
-using CommunityToolkit.Mvvm.DependencyInjection;
 using Files.App.ViewModels.Previews;
-using Files.Backend.Services.Settings;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
-using System;
 using Windows.Media.Playback;
 
 // The User Control item template is documented at https://go.microsoft.com/fwlink/?LinkId=234236
@@ -20,26 +17,41 @@ namespace Files.App.UserControls.FilePreviews
 			ViewModel = model;
 			InitializeComponent();
 			PlayerContext.Loaded += PlayerContext_Loaded;
+			Unloaded += MediaPreview_Unloaded;
 		}
 
 		public MediaPreviewViewModel ViewModel { get; set; }
 
 		private void PlayerContext_Loaded(object sender, RoutedEventArgs e)
 		{
-			PlayerContext.MediaPlayer.Volume = UserSettingsService.PreviewPaneSettingsService.MediaVolume;
+			PlayerContext.MediaPlayer.Volume = UserSettingsService.InfoPaneSettingsService.MediaVolume;
 			PlayerContext.MediaPlayer.VolumeChanged += MediaPlayer_VolumeChanged;
 			ViewModel.TogglePlaybackRequested += TogglePlaybackRequestInvoked;
 		}
 
+		private void MediaPreview_Unloaded(object sender, RoutedEventArgs e)
+		{
+			// The MediaPlayerElement isn't properly disposed by Windows so we set the source to null
+			// to avoid issues the next time the control is used.
+			PlayerContext.Source = null;
+			ViewModel.PreviewControlBase_Unloaded(sender, e);
+
+			PlayerContext.Loaded -= PlayerContext_Loaded;
+			Unloaded -= MediaPreview_Unloaded;
+
+			PlayerContext.MediaPlayer.VolumeChanged -= MediaPlayer_VolumeChanged;
+			ViewModel.TogglePlaybackRequested -= TogglePlaybackRequestInvoked;
+		}
+
 		private void MediaPlayer_VolumeChanged(MediaPlayer sender, object args)
 		{
-			if (sender.Volume != UserSettingsService.PreviewPaneSettingsService.MediaVolume)
+			if (sender.Volume != UserSettingsService.InfoPaneSettingsService.MediaVolume)
 			{
-				UserSettingsService.PreviewPaneSettingsService.MediaVolume = sender.Volume;
+				UserSettingsService.InfoPaneSettingsService.MediaVolume = sender.Volume;
 			}
 		}
 
-		private void TogglePlaybackRequestInvoked(object sender, EventArgs e)
+		private void TogglePlaybackRequestInvoked(object? sender, EventArgs e)
 		{
 			if (PlayerContext.MediaPlayer.PlaybackSession.PlaybackState is not MediaPlaybackState.Playing)
 			{
@@ -53,7 +65,7 @@ namespace Files.App.UserControls.FilePreviews
 
 		private void TogglePlaybackAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
 		{
-			TogglePlaybackRequestInvoked(sender, null);
+			TogglePlaybackRequestInvoked(sender, EventArgs.Empty);
 		}
 	}
 }

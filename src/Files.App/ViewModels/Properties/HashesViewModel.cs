@@ -1,29 +1,24 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.WinUI;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using Files.Backend.Models;
-using Files.Backend.Services.Settings;
-using Files.Shared.Extensions;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Files.Shared.Helpers;
-using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml.Controls;
 using System.IO;
-using System.Linq;
-using System.Threading;
+using System.Security.Cryptography;
 using System.Windows.Input;
 
 namespace Files.App.ViewModels.Properties
 {
-	public class HashesViewModel : ObservableObject, IDisposable
+	public sealed partial class HashesViewModel : ObservableObject, IDisposable
 	{
-		private IUserSettingsService UserSettingsService { get; } = Ioc.Default.GetService<IUserSettingsService>()!;
+		private ICommonDialogService CommonDialogService { get; } = Ioc.Default.GetRequiredService<ICommonDialogService>();
+		private IUserSettingsService UserSettingsService { get; } = Ioc.Default.GetRequiredService<IUserSettingsService>();
 
-		private HashInfoItem _selectedItem;
-		public HashInfoItem SelectedItem
+		private readonly AppWindow _appWindow;
+
+		private HashInfoItem? _selectedItem;
+		public HashInfoItem? SelectedItem
 		{
 			get => _selectedItem;
 			set => SetProperty(ref _selectedItem, value);
@@ -34,29 +29,61 @@ namespace Files.App.ViewModels.Properties
 		public Dictionary<string, bool> ShowHashes { get; private set; }
 
 		public ICommand ToggleIsEnabledCommand { get; private set; }
+		public ICommand CompareFileCommand { get; private set; }
 
 		private ListedItem _item;
 
 		private CancellationTokenSource _cancellationTokenSource;
 
-		public HashesViewModel(ListedItem item)
+		private string? _hashInput;
+		public string? HashInput
+		{
+			get => _hashInput;
+			set
+			{
+				SetProperty(ref _hashInput, value);
+
+				OnHashInputTextChanged();
+				OnPropertyChanged(nameof(IsInfoBarOpen));
+			}
+		}
+
+		private InfoBarSeverity _infoBarSeverity;
+		public InfoBarSeverity InfoBarSeverity
+		{
+			get => _infoBarSeverity;
+			set => SetProperty(ref _infoBarSeverity, value);
+		}
+
+		private string? _infoBarTitle;
+		public string? InfoBarTitle
+		{
+			get => _infoBarTitle;
+			set => SetProperty(ref _infoBarTitle, value);
+		}
+
+		public bool IsInfoBarOpen
+			=> !string.IsNullOrEmpty(HashInput);
+
+		public HashesViewModel(ListedItem item, AppWindow appWindow)
 		{
 			ToggleIsEnabledCommand = new RelayCommand<string>(ToggleIsEnabled);
 
 			_item = item;
+			_appWindow = appWindow;
 			_cancellationTokenSource = new();
 
-			Hashes = new()
-			{
+			Hashes =
+			[
 				new() { Algorithm = "CRC32" },
 				new() { Algorithm = "MD5" },
 				new() { Algorithm = "SHA1" },
 				new() { Algorithm = "SHA256" },
 				new() { Algorithm = "SHA384" },
 				new() { Algorithm = "SHA512" },
-			};
+			];
 
-			ShowHashes = UserSettingsService.PreferencesSettingsService.ShowHashesDictionary ?? new();
+			ShowHashes = UserSettingsService.GeneralSettingsService.ShowHashesDictionary ?? [];
 			// Default settings
 			ShowHashes.TryAdd("CRC32", true);
 			ShowHashes.TryAdd("MD5", true);
@@ -66,28 +93,38 @@ namespace Files.App.ViewModels.Properties
 			ShowHashes.TryAdd("SHA512", false);
 
 			Hashes.Where(x => ShowHashes[x.Algorithm]).ForEach(x => ToggleIsEnabledCommand.Execute(x.Algorithm));
+
+			CompareFileCommand = new RelayCommand(async () => await OnCompareFileAsync());
 		}
 
 		private void ToggleIsEnabled(string? algorithm)
 		{
-			var hashInfoItem = Hashes.Where(x => x.Algorithm == algorithm).First();
+			var hashInfoItem = Hashes.First(x => x.Algorithm == algorithm);
 			hashInfoItem.IsEnabled = !hashInfoItem.IsEnabled;
 
 			if (ShowHashes[hashInfoItem.Algorithm] != hashInfoItem.IsEnabled)
 			{
 				ShowHashes[hashInfoItem.Algorithm] = hashInfoItem.IsEnabled;
-				UserSettingsService.PreferencesSettingsService.ShowHashesDictionary = ShowHashes;
+				UserSettingsService.GeneralSettingsService.ShowHashesDictionary = ShowHashes;
+			}
+
+			// Don't calculate hashes for online files
+			if (_item.SyncStatusUI.SyncStatus is CloudDriveSyncStatus.FileOnline or CloudDriveSyncStatus.FolderOnline)
+			{
+				hashInfoItem.HashValue = Strings.CalculationOnlineFileHashError.GetLocalizedResource();
+				return;
 			}
 
 			if (hashInfoItem.HashValue is null && hashInfoItem.IsEnabled)
 			{
-				hashInfoItem.HashValue = "Calculating".GetLocalizedResource();
+				hashInfoItem.IsCalculating = true;
 
-				App.Window.DispatcherQueue.EnqueueAsync(async () =>
+				MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
 				{
 					try
 					{
-						using (var stream = File.OpenRead(_item.ItemPath))
+						var itemPath = _item.GetRequiredPath();
+						await using (var stream = File.OpenRead(itemPath))
 						{
 							hashInfoItem.HashValue = hashInfoItem.Algorithm switch
 							{
@@ -97,7 +134,7 @@ namespace Files.App.ViewModels.Properties
 								"SHA256" => await ChecksumHelpers.CreateSHA256(stream, _cancellationTokenSource.Token),
 								"SHA384" => await ChecksumHelpers.CreateSHA384(stream, _cancellationTokenSource.Token),
 								"SHA512" => await ChecksumHelpers.CreateSHA512(stream, _cancellationTokenSource.Token),
-								_ => throw new InvalidOperationException()
+								_ => throw new InvalidOperationException($"The hash algorithm '{hashInfoItem.Algorithm}' is not supported.")
 							};
 						}
 
@@ -107,12 +144,67 @@ namespace Files.App.ViewModels.Properties
 					{
 						// not an error
 					}
+					catch (IOException)
+					{
+						// File is currently open
+						hashInfoItem.HashValue = Strings.CalculationErrorFileIsOpen.GetLocalizedResource();
+					}
 					catch (Exception)
 					{
-						hashInfoItem.HashValue = "CalculationError".GetLocalizedResource();
+						hashInfoItem.HashValue = Strings.CalculationError.GetLocalizedResource();
+					}
+					finally
+					{
+						hashInfoItem.IsCalculating = false;
 					}
 				});
 			}
+		}
+
+		public string FindMatchingAlgorithm(string? hash)
+		{
+			if (string.IsNullOrEmpty(hash))
+				return string.Empty;
+
+			return Hashes.FirstOrDefault(h => h.HashValue?.Equals(hash, StringComparison.OrdinalIgnoreCase) == true)?.Algorithm ?? string.Empty;
+		}
+
+		private static Task<string> CalculateFileHashAsync(string filePath)
+		{
+			return Task.Run(() =>
+			{
+				using var stream = File.OpenRead(filePath);
+				return Convert.ToHexStringLower(MD5.HashData(stream));
+			});
+		}
+
+		private void OnHashInputTextChanged()
+		{
+			string matchingAlgorithm = FindMatchingAlgorithm(HashInput);
+
+			InfoBarSeverity = string.IsNullOrEmpty(matchingAlgorithm)
+				? InfoBarSeverity.Error
+				: InfoBarSeverity.Success;
+
+			InfoBarTitle = string.IsNullOrEmpty(matchingAlgorithm)
+				? Strings.HashesDoNotMatch.GetLocalizedResource()
+				: string.Format(Strings.HashesMatch.GetLocalizedResource(), matchingAlgorithm);
+		}
+
+		private async Task OnCompareFileAsync()
+		{
+			var hWnd = Microsoft.UI.Win32Interop.GetWindowFromWindowId(_appWindow.Id);
+
+			var result = CommonDialogService.Open_FileOpenDialog(
+				hWnd,
+				false,
+				[],
+				Environment.SpecialFolder.Desktop,
+				out var filePath);
+
+			HashInput = result && filePath != null
+				? await CalculateFileHashAsync(filePath)
+				: string.Empty;
 		}
 
 		public void Dispose()

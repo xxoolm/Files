@@ -1,28 +1,45 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using Files.Shared.Enums;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SetAsLockscreenBackgroundAction : BaseSetAsAction
+	[GeneratedRichCommand]
+	internal sealed partial class SetAsLockscreenBackgroundAction : BaseSetAsAction
 	{
-		public override string Label { get; } = "SetAsLockscreen".GetLocalizedResource();
+		public override string Label
+			=> Strings.Lockscreen.GetLocalizedResource();
 
-		public override string Description => "TODO: Need to be described.";
+		public override string ExtendedLabel
+			=> Strings.SetAsLockscreen.GetLocalizedResource();
 
-		public override RichGlyph Glyph { get; } = new("\uEE3F");
+		public override string Description
+			=> Strings.SetAsLockscreenBackgroundDescription.GetLocalizedResource();
 
-		public override bool IsExecutable => base.IsExecutable &&
-			context.SelectedItem is not null;
+		public string AccessKey
+			=> "L";
 
-		public override Task ExecuteAsync()
+		public override RichGlyph Glyph
+			=> new("\uEE3F");
+
+		public override bool IsExecutable =>
+			base.IsExecutable &&
+			ContentPageContext.SelectedItem is not null;
+
+		public override Task ExecuteAsync(object? parameter = null)
 		{
-			if (context.SelectedItem is not null)
-				WallpaperHelpers.SetAsBackground(WallpaperType.LockScreen, context.SelectedItem.ItemPath);
+			if (!IsExecutable || ContentPageContext.SelectedItem is not ListedItem selectedItem)
+				return Task.CompletedTask;
 
-			return Task.CompletedTask;
+			try
+			{
+				return WindowsWallpaperService.SetLockScreenWallpaper(selectedItem.ItemPath!);
+			}
+			catch (Exception ex)
+			{
+				ShowErrorDialog(ex.Message);
+
+				return Task.CompletedTask;
+			}
 		}
 	}
 }

@@ -1,0 +1,376 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Microsoft.UI.Input;
+using Microsoft.UI.Xaml.Controls;
+using System.Collections.Specialized;
+using System.Runtime.InteropServices;
+using Windows.Storage;
+using Windows.System;
+using Windows.UI.Core;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.System.Com;
+using Windows.Win32.System.WinRT;
+using Windows.Win32.UI.Shell;
+
+namespace Files.App.ViewModels.UserControls.Widgets
+{
+	/// <summary>
+	/// Represents view model of <see cref="QuickAccessWidget"/>.
+	/// </summary>
+	public sealed partial class QuickAccessWidgetViewModel : BaseWidgetViewModel, IWidgetViewModel
+	{
+		// Properties
+
+		public ObservableCollection<WidgetFolderCardItem> Items { get; } = [];
+
+		public string WidgetName => nameof(QuickAccessWidget);
+		public string AutomationProperties => Strings.QuickAccess.GetLocalizedResource();
+		public string WidgetHeader => Strings.QuickAccess.GetLocalizedResource();
+		public bool IsWidgetSettingEnabled => UserSettingsService.GeneralSettingsService.ShowQuickAccessWidget;
+		public bool ShowMenuFlyout => false;
+		public MenuFlyoutItem? MenuFlyoutItem => null;
+
+		// Fields
+
+		private readonly EventHandler<ModifyQuickAccessEventArgs> _quickAccessWidgetUpdatedHandler;
+		private bool isDisposed;
+		private int _refreshVersion;
+
+
+		// Constructor
+
+		public QuickAccessWidgetViewModel()
+		{
+			Items.CollectionChanged += Items_CollectionChanged;
+
+			OpenPropertiesCommand = new RelayCommand<WidgetFolderCardItem>(ExecuteOpenPropertiesCommand);
+			PinToSidebarCommand = new AsyncRelayCommand<WidgetFolderCardItem>(ExecutePinToSidebarCommand);
+			UnpinFromSidebarCommand = new AsyncRelayCommand<WidgetFolderCardItem>(ExecuteUnpinFromSidebarCommand);
+
+			_quickAccessWidgetUpdatedHandler = async (s, e) =>
+			{
+				if (e.Reorder)
+					await SafetyExtensions.IgnoreExceptions(RefreshWidgetAsync, App.Logger, typeof(COMException));
+			};
+			App.QuickAccessManager.UpdateQuickAccessWidget += _quickAccessWidgetUpdatedHandler;
+
+			App.ServerChanged += OnServerChanged;
+		}
+
+		// Methods
+
+		private async void OnServerChanged(object? sender, string name)
+		{
+			if (!isDisposed && name == ServerChangeNames.PinnedFolders)
+				await SafetyExtensions.IgnoreExceptions(RefreshWidgetAsync, App.Logger, typeof(COMException));
+		}
+
+		public Task RefreshWidgetAsync()
+		{
+			if (App.QuickAccessManager.Model.IsSyncSuspended)
+				return Task.CompletedTask;
+
+			return MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+			{
+				if (isDisposed)
+					return;
+
+				var refreshVersion = ++_refreshVersion;
+				var folders = (await Server.PinnedFoldersService.GetPinnedFoldersAsync())?.ToArray();
+
+				if (isDisposed || refreshVersion != _refreshVersion || folders is null)
+					return;
+
+				var newPaths = folders.Select(f => f.ParsingPath).ToList();
+				if (Items.Count == newPaths.Count &&
+					new HashSet<string>(Items.Select(i => i.Path ?? string.Empty), StringComparer.OrdinalIgnoreCase).SetEquals(newPaths) &&
+					Items.All(item => folders.Any(f => string.Equals(f.ParsingPath, item.Path, StringComparison.OrdinalIgnoreCase) && f.IsPinned == item.IsPinned)))
+				{
+					for (int targetIdx = 0; targetIdx < newPaths.Count; targetIdx++)
+					{
+						var currentIdx = -1;
+						for (int j = targetIdx; j < Items.Count; j++)
+						{
+							if (string.Equals(Items[j].Path, newPaths[targetIdx], StringComparison.OrdinalIgnoreCase))
+							{
+								currentIdx = j;
+								break;
+							}
+						}
+
+						if (currentIdx >= 0 && currentIdx != targetIdx)
+							Items.Move(currentIdx, targetIdx);
+					}
+
+					return;
+				}
+
+				var replacements = new List<WidgetFolderCardItem>();
+				foreach (var folder in folders)
+				{
+					SafetyExtensions.IgnoreExceptions(() =>
+					{
+						var name = folder.Name;
+						var path = folder.ParsingPath;
+						var isPinned = folder.IsPinned;
+						using var shellItem = new ShellItem(new ShellPidl(folder.Pidl));
+						replacements.Add(new WidgetFolderCardItem(new WindowsFolder(shellItem.IShellItem), name, path, isPinned));
+					}, App.Logger);
+				}
+
+				foreach (var item in Items)
+					item.Dispose();
+				Items.Clear();
+				foreach (var item in replacements)
+					Items.Add(item);
+			});
+		}
+
+		public override List<ContextMenuFlyoutItemViewModel> GetItemMenuItems(WidgetCardItem item, bool isPinned, bool isFolder = false)
+		{
+			return new List<ContextMenuFlyoutItemViewModel>()
+			{
+				new ContextMenuFlyoutItemViewModelBuilder(CommandManager.OpenInNewTabFromHome)
+				{
+					IsVisible = UserSettingsService.GeneralSettingsService.ShowOpenInNewTab && CommandManager.OpenInNewTabFromHome.IsExecutable
+				}.Build(),
+				new ContextMenuFlyoutItemViewModelBuilder(CommandManager.OpenInNewWindowFromHome)
+				{
+					IsVisible = UserSettingsService.GeneralSettingsService.ShowOpenInNewWindow && CommandManager.OpenInNewWindowFromHome.IsExecutable
+				}.Build(),
+				new ContextMenuFlyoutItemViewModel()
+				{
+					Text = Strings.OpenInNewPane.GetLocalizedResource(),
+					ShowItem = UserSettingsService.GeneralSettingsService.ShowOpenInNewPane && CommandManager.OpenInNewPaneFromHome.IsExecutable,
+					IsEnabled = CommandManager.OpenInNewPaneFromHome.IsExecutable,
+					Items =
+					[
+						new ContextMenuFlyoutItemViewModel()
+						{
+							Text = Strings.SplitPaneVertically.GetLocalizedResource(),
+							ThemedIconModel = new() { ThemedIconStyle = "App.ThemedIcons.OpenInPaneVertical" },
+							Command = CommandManager.OpenInNewPaneFromHome,
+							CommandParameter = ShellPaneArrangement.Vertical,
+						},
+						new ContextMenuFlyoutItemViewModel()
+						{
+							Text = Strings.SplitPaneHorizontally.GetLocalizedResource(),
+							ThemedIconModel = new() { ThemedIconStyle = "App.ThemedIcons.OpenInPaneHorizontal" },
+							Command = CommandManager.OpenInNewPaneFromHome,
+							CommandParameter = ShellPaneArrangement.Horizontal,
+						},
+					]
+				},
+				new ContextMenuFlyoutItemViewModelBuilder(CommandManager.OpenInOtherPaneFromHome)
+				{
+					IsVisible = UserSettingsService.GeneralSettingsService.ShowOpenInNewPane && CommandManager.OpenInOtherPaneFromHome.IsExecutable
+				}.Build(),
+				new ContextMenuFlyoutItemViewModelBuilder(CommandManager.CopyItemFromHome)
+				{
+					IsPrimary = true,
+					IsVisible = CommandManager.CopyItemFromHome.IsExecutable
+				}.Build(),
+				new()
+				{
+					Text = Strings.Properties.GetLocalizedResource(),
+					ThemedIconModel = new() { ThemedIconStyle = "App.ThemedIcons.Properties" },
+					Command = OpenPropertiesCommand,
+					CommandParameter = item,
+					IsPrimary = true
+				},
+				new()
+				{
+					Text = Strings.PinFolderToSidebar.GetLocalizedResource(),
+					ThemedIconModel = new() { ThemedIconStyle = "App.ThemedIcons.FavoritePin" },
+					Command = PinToSidebarCommand,
+					CommandParameter = item,
+					ShowItem = !isPinned && UserSettingsService.GeneralSettingsService.ShowPinToSideBar
+				},
+				new()
+				{
+					Text = Strings.UnpinFolderFromSidebar.GetLocalizedResource(),
+					ThemedIconModel = new() { ThemedIconStyle = "App.ThemedIcons.FavoritePinRemove" },
+					Command = UnpinFromSidebarCommand,
+					CommandParameter = item,
+					ShowItem = isPinned && UserSettingsService.GeneralSettingsService.ShowPinToSideBar
+				},
+				new()
+				{
+					Text = Strings.SendTo.GetLocalizedResource(),
+					Tag = "SendToPlaceholder",
+					ShowItem = UserSettingsService.GeneralSettingsService.ShowSendToMenu
+				},
+				new ContextMenuFlyoutItemViewModel()
+				{
+					ItemType = ContextMenuFlyoutItemType.Separator,
+					ShowItem = UserSettingsService.GeneralSettingsService.ShowOpenTerminal && CommandManager.OpenTerminalFromHome.IsExecutable
+				},
+				new ContextMenuFlyoutItemViewModelBuilder(CommandManager.OpenTerminalFromHome)
+				{
+					IsVisible = UserSettingsService.GeneralSettingsService.ShowOpenTerminal && CommandManager.OpenTerminalFromHome.IsExecutable
+				}.Build(),
+				new()
+				{
+					ItemType = ContextMenuFlyoutItemType.Separator,
+					Tag = "OverflowSeparator",
+				},
+				new()
+				{
+					Text = Strings.Loading.GetLocalizedResource(),
+					Glyph = "\xE712",
+					Items = [],
+					ID = "ItemOverflow",
+					Tag = "ItemOverflow",
+					IsEnabled = false,
+				}
+			}.Where(x => x.ShowItem).ToList();
+		}
+
+		public async Task NavigateToPath(string path)
+		{
+			var ctrlPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(CoreVirtualKeyStates.Down);
+			if (ctrlPressed)
+			{
+				await NavigationHelpers.OpenPathInNewTab(path);
+				return;
+			}
+
+			ContentPageContext.ShellPage?.NavigateWithArguments(
+				ContentPageContext.ShellPage.InstanceViewModel.FolderSettings.GetLayoutType(path),
+				new() { NavPathParam = path });
+		}
+
+		// Event methods
+
+		private async void Items_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+		{
+			if (e.Action is NotifyCollectionChangedAction.Add)
+			{
+				foreach (WidgetFolderCardItem cardItem in e.NewItems!)
+					await cardItem.LoadCardThumbnailAsync();
+			}
+		}
+
+		// Command methods
+
+		public override async Task ExecutePinToSidebarCommand(WidgetCardItem? item)
+		{
+			if (item is not WidgetFolderCardItem folderCardItem || folderCardItem.Path is null)
+				return;
+
+			var lastPinnedItemIndex = Items.LastOrDefault(x => x.IsPinned) is { } lastPinnedItem ? Items.IndexOf(lastPinnedItem) : 0;
+			var currentPinnedItemIndex = Items.IndexOf(folderCardItem);
+
+			if (currentPinnedItemIndex is -1)
+				return;
+
+			HRESULT hr = PInvoke.RoGetAgileReference(AgileReferenceOptions.AGILEREFERENCE_DEFAULT, typeof(IShellItem).GUID, folderCardItem.Item.ThisPtr, out IAgileReference pAgileReference);
+			if (hr.ThrowIfFailedOnDebug().Failed)
+				return;
+
+			// Pin to Quick Access on Windows
+			hr = await STATask.Run(() =>
+			{
+				hr = pAgileReference.Resolve(out IShellItem pShellItem);
+				if (hr.ThrowIfFailedOnDebug().Failed)
+					return hr;
+
+				using var windowsFile = new WindowsFile(pShellItem);
+				// NOTE: "pintohome" is an undocumented verb, which calls an undocumented COM class, windows.storage.dll!CPinToFrequentExecute : public IExecuteCommand, ...
+				return windowsFile.TryInvokeContextMenuVerb("pintohome");
+			}, App.Logger);
+
+			// Server notifications update the collection.
+		}
+
+		public override async Task ExecuteUnpinFromSidebarCommand(WidgetCardItem? item)
+		{
+			if (item is not WidgetFolderCardItem folderCardItem || folderCardItem.Path is null)
+				return;
+
+			HRESULT hr = PInvoke.RoGetAgileReference(AgileReferenceOptions.AGILEREFERENCE_DEFAULT, typeof(IShellItem).GUID, folderCardItem.Item.ThisPtr, out IAgileReference pAgileReference);
+			if (hr.ThrowIfFailedOnDebug().Failed)
+				return;
+
+			// Unpin from Quick Access on Windows
+			hr = await STATask.Run(() =>
+			{
+				hr = pAgileReference.Resolve(out IShellItem pShellItem);
+				if (hr.ThrowIfFailedOnDebug().Failed)
+					return hr;
+
+				using var windowsFile = new WindowsFile(pShellItem);
+
+				// NOTE: "unpinfromhome" is an undocumented verb, which calls an undocumented COM class, windows.storage.dll!CRemoveFromFrequentPlacesExecute : public IExecuteCommand, ...
+				// NOTE: "remove" is for some shell folders where the "unpinfromhome" may not work
+				return windowsFile.TryInvokeContextMenuVerbs(["unpinfromhome", "remove"], true);
+			}, App.Logger);
+
+			if (hr.ThrowIfFailedOnDebug().Failed)
+				return;
+
+			// Server notifications update the collection.
+		}
+
+		private void ExecuteOpenPropertiesCommand(WidgetFolderCardItem? item)
+		{
+			if (!HomePageContext.IsAnyItemRightClicked || item?.Item is null)
+				return;
+
+			var flyout = HomePageContext.ItemContextFlyoutMenu
+				?? throw new InvalidOperationException("The quick-access item context menu is not available.");
+
+			async void FlyoutClosed(object? sender, object args)
+			{
+				flyout.Closed -= FlyoutClosed;
+				var itemPath = item.Path
+					?? throw new InvalidOperationException("The quick-access item does not have a path.");
+				var shellPage = ContentPageContext.ShellPage
+					?? throw new InvalidOperationException("There is no active shell page for quick-access properties.");
+				var shellViewModel = shellPage.GetRequiredShellViewModel();
+
+				ListedItem listedItem = new(null)
+				{
+					ItemPath = itemPath,
+					ItemNameRaw = item.Text,
+					PrimaryItemAttribute = StorageItemTypes.Folder,
+					ItemType = Strings.Folder.GetLocalizedResource(),
+				};
+
+				if (!string.Equals(itemPath, Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase))
+				{
+					BaseStorageFolder? matchingStorageFolder = (await shellViewModel.GetFolderFromPathAsync(itemPath)).Result;
+					if (matchingStorageFolder is not null)
+					{
+						var syncStatus = await shellViewModel.CheckCloudDriveSyncStatusAsync(matchingStorageFolder);
+						listedItem.SyncStatusUI = CloudDriveSyncStatusUI.FromCloudDriveSyncStatus(syncStatus);
+					}
+				}
+
+				FilePropertiesHelpers.OpenPropertiesWindow(listedItem, shellPage);
+			}
+
+			flyout.Closed += FlyoutClosed;
+		}
+
+		// Disposer
+
+		public void Dispose()
+		{
+			if (isDisposed)
+				return;
+
+			isDisposed = true;
+			App.QuickAccessManager.UpdateQuickAccessWidget -= _quickAccessWidgetUpdatedHandler;
+			Items.CollectionChanged -= Items_CollectionChanged;
+			App.ServerChanged -= OnServerChanged;
+
+			foreach (var item in Items)
+				item.Dispose();
+
+			Items.Clear();
+		}
+	}
+}

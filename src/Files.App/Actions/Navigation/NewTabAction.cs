@@ -1,19 +1,30 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
-using Files.App.ViewModels;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class NewTabAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class NewTabAction : IAction
 	{
-		public string Label { get; } = "NewTab".GetLocalizedResource();
+		public string Label
+			=> Strings.NewTab.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.NewTabDescription.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.T, VirtualKeyModifiers.Control);
+		public ActionCategory Category
+			=> ActionCategory.Navigation;
 
-		public Task ExecuteAsync() => MainPageViewModel.AddNewTabAsync();
+		public HotKey HotKey
+			=> new(Keys.T, KeyModifiers.Ctrl);
+
+		public NewTabAction()
+		{
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
+		{
+			return NavigationHelpers.AddNewTabAsync();
+		}
 	}
 }

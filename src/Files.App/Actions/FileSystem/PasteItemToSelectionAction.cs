@@ -1,61 +1,70 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.DataModels;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using Files.App.Helpers;
-using System.ComponentModel;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class PasteItemToSelectionAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class PasteItemToSelectionAction : BaseUIAction, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Paste".GetLocalizedResource();
+		public string Label
+			=> Strings.PasteToSelectedFolder.GetLocalizedResource();
 
-		public string Description => "PasteItemToSelectionDescription".GetLocalizedResource();
+		public string Description
+			=> Strings.PasteItemToSelectionDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new(opacityStyle: "ColorIconPaste");
+		public ActionCategory Category
+			=> ActionCategory.FileSystem;
 
-		public HotKey HotKey { get; } = new(VirtualKey.V, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift);
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.Paste");
 
-		private bool isExecutable;
-		public bool IsExecutable => isExecutable;
+		public string AccessKey
+			=> "V";
+
+		public HotKey HotKey
+			=> new(Keys.V, KeyModifiers.CtrlShift);
+
+		public override bool IsExecutable
+			=> GetIsExecutable();
 
 		public PasteItemToSelectionAction()
 		{
-			isExecutable = GetIsExecutable();
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
 
 			context.PropertyChanged += Context_PropertyChanged;
 			App.AppModel.PropertyChanged += AppModel_PropertyChanged;
 		}
 
-		public async Task ExecuteAsync()
+		public async Task ExecuteAsync(object? parameter = null)
 		{
-			if (context.ShellPage is null)
+			if (context.ShellPage is not { } shellPage)
 				return;
 
-			string path = context.SelectedItem is ListedItem selectedItem
+			string? path = context.SelectedItem is ListedItem selectedItem
 				? selectedItem.ItemPath
-				: context.ShellPage.FilesystemViewModel.WorkingDirectory;
+				: shellPage.ShellViewModel?.WorkingDirectory;
+			if (path is null)
+				return;
 
-			await UIFilesystemHelpers.PasteItemAsync(path, context.ShellPage);
+			await UIFilesystemHelpers.PasteItemAsync(path, shellPage);
 		}
 
 		public bool GetIsExecutable()
 		{
 			if (!App.AppModel.IsPasteEnabled)
 				return false;
-			if (context.PageType is ContentPageTypes.Home or ContentPageTypes.RecycleBin or ContentPageTypes.SearchResults)
+
+			if (context.PageType is ContentPageTypes.Home or ContentPageTypes.RecycleBin or ContentPageTypes.SearchResults or ContentPageTypes.ReleaseNotes or ContentPageTypes.Settings)
 				return false;
+
 			if (!context.HasSelection)
 				return true;
-			return context.SelectedItem?.PrimaryItemAttribute is Windows.Storage.StorageItemTypes.Folder;
+
+			return
+				context.SelectedItem?.PrimaryItemAttribute == Windows.Storage.StorageItemTypes.Folder &&
+				UIHelpers.CanShowDialog;
 		}
 
 		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -64,14 +73,14 @@ namespace Files.App.Actions
 			{
 				case nameof(IContentPageContext.PageType):
 				case nameof(IContentPageContext.SelectedItem):
-					SetProperty(ref isExecutable, GetIsExecutable(), nameof(IsExecutable));
+					OnPropertyChanged(nameof(IsExecutable));
 					break;
 			}
 		}
 		private void AppModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
 			if (e.PropertyName is nameof(AppModel.IsPasteEnabled))
-				SetProperty(ref isExecutable, GetIsExecutable(), nameof(IsExecutable));
+				OnPropertyChanged(nameof(IsExecutable));
 		}
 	}
 }

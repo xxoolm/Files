@@ -1,37 +1,47 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.ComponentModel;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class RefreshItemsAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class RefreshItemsAction : ObservableObject, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Refresh".GetLocalizedResource();
-		public string Description { get; } = "TODO";
+		public string Label
+			=> Strings.Refresh.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new("\uE72C");
+		public string Description
+			=> Strings.RefreshItemsDescription.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.R, VirtualKeyModifiers.Control);
+		public ActionCategory Category
+			=> ActionCategory.FileSystem;
 
-        public HotKey SecondHotKey { get; } = new(VirtualKey.F5);
-        
-		public bool IsExecutable => context.CanRefresh;
+		public RichGlyph Glyph
+			=> new("\uE72C");
+
+		public HotKey HotKey
+			=> new(Keys.R, KeyModifiers.Ctrl);
+
+		public HotKey SecondHotKey
+			=> new(Keys.F5);
+
+		public bool IsExecutable
+			=> context.CanRefresh;
 
 		public RefreshItemsAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public async Task ExecuteAsync()
+		public async Task ExecuteAsync(object? parameter = null)
 		{
-			context.ShellPage?.Refresh_Click();
+			if (context.ShellPage is null)
+				return;
+
+			await context.ShellPage.Refresh_Click();
 		}
 
 		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)

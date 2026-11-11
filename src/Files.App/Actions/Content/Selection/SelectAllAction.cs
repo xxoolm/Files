@@ -1,22 +1,27 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SelectAllAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class SelectAllAction : IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "SelectAll".GetLocalizedResource();
+		public string Label
+			=> Strings.SelectAll.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.SelectAllDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new("\uE8B3");
-		public HotKey HotKey { get; } = new(VirtualKey.A, VirtualKeyModifiers.Control);
+		public ActionCategory Category
+			=> ActionCategory.Selection;
+
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.SelectAll");
+
+		public HotKey HotKey
+			=> new(Keys.A, KeyModifiers.Ctrl);
 
 		public bool IsExecutable
 		{
@@ -29,21 +34,27 @@ namespace Files.App.Actions
 				if (page is null)
 					return false;
 
-				int itemCount = page.FilesystemViewModel.FilesAndFolders.Count;
+				var shellViewModel = page.GetRequiredShellViewModel();
+				int itemCount = shellViewModel.FilesAndFolders.Count;
 				int selectedItemCount = context.SelectedItems.Count;
 				if (itemCount == selectedItemCount)
 					return false;
 
-				bool isEditing = page.ToolbarViewModel.IsEditModeEnabled;
-				bool isRenaming = page.SlimContentPage.IsRenamingItem;
+				bool isRenaming = page.SlimContentPage?.IsRenamingItem ?? false;
 
-				return !isEditing && !isRenaming;
+				return !isRenaming;
 			}
 		}
 
-		public Task ExecuteAsync()
+		public SelectAllAction()
+		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context.ShellPage?.SlimContentPage?.ItemManipulationModel?.SelectAllItems();
+
 			return Task.CompletedTask;
 		}
 	}

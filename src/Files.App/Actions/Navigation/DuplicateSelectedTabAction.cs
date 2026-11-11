@@ -1,34 +1,53 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Views;
-using System.Threading.Tasks;
-using Windows.System;
-using static Files.App.ViewModels.MainPageViewModel;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class DuplicateSelectedTabAction : IAction
+	[GeneratedRichCommand]
+	internal sealed partial class DuplicateSelectedTabAction : ObservableObject, IAction
 	{
-		private readonly IMultitaskingContext context = Ioc.Default.GetRequiredService<IMultitaskingContext>();
+		private readonly IMultitaskingContext context;
 
-		public string Label { get; } = "DuplicateTab".GetLocalizedResource();
-		public string Description => "TODO: Need to be described.";
+		public string Label
+			=> Strings.DuplicateTab.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.K, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift);
+		public string Description
+			=> Strings.DuplicateSelectedTabDescription.GetLocalizedResource();
 
-		public async Task ExecuteAsync()
+		public ActionCategory Category
+			=> ActionCategory.Navigation;
+
+		public HotKey HotKey
+			=> new(Keys.K, KeyModifiers.CtrlShift);
+
+		public bool IsExecutable
+			=> context.SelectedTabItem is not null;
+
+		public DuplicateSelectedTabAction()
 		{
-			var arguments = context.SelectedTabItem.TabItemArguments;
+			context = Ioc.Default.GetRequiredService<IMultitaskingContext>();
+			context.PropertyChanged += MultitaskingContext_PropertyChanged;
+		}
+
+		public async Task ExecuteAsync(object? parameter = null)
+		{
+			var selectedTabItem = context.SelectedTabItem ?? throw new InvalidOperationException("A selected tab is required to duplicate a tab.");
+			var arguments = selectedTabItem.NavigationParameter;
+
 			if (arguments is null)
 			{
-				await AddNewTabByPathAsync(typeof(PaneHolderPage), "Home");
+				await NavigationHelpers.AddNewTabByPathAsync(typeof(ShellPanesPage), "Home", true);
 			}
 			else
 			{
-				await AddNewTabByParam(arguments.InitialPageType, arguments.NavigationArg, context.SelectedTabIndex + 1);
+				await NavigationHelpers.AddNewTabByParamAsync(arguments.InitialPageType, arguments.NavigationParameter, context.SelectedTabIndex + 1);
 			}
+		}
+
+		private void MultitaskingContext_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+		{
+			if (e.PropertyName == nameof(IMultitaskingContext.SelectedTabItem))
+				OnPropertyChanged(nameof(IsExecutable));
 		}
 	}
 }

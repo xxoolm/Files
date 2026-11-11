@@ -1,11 +1,15 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
-using System;
+using WinRT;
 
 namespace Files.App.Converters
 {
-	public class VisibilityInvertConverter : IValueConverter
+	internal sealed partial class VisibilityInvertConverter : IValueConverter
 	{
+		[DynamicWindowsRuntimeCast(typeof(Visibility))]
 		public object Convert(object value, Type targetType, object parameter, string language)
 		{
 			if (value is bool isVisible)

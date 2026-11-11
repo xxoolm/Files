@@ -1,20 +1,24 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class InvertSelectionAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class InvertSelectionAction : IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "InvertSelection".GetLocalizedResource();
+		public string Label
+			=> Strings.InvertSelection.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.InvertSelectionDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new("\uE746");
+		public ActionCategory Category
+			=> ActionCategory.Selection;
+
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.SelectInvert");
 
 		public bool IsExecutable
 		{
@@ -30,16 +34,20 @@ namespace Files.App.Actions
 				if (page is null)
 					return false;
 
-				bool isEditing = page.ToolbarViewModel.IsEditModeEnabled;
-				bool isRenaming = page.SlimContentPage.IsRenamingItem;
-
-				return !isEditing && !isRenaming;
+				bool isRenaming = page.SlimContentPage?.IsRenamingItem ?? false;
+				return !isRenaming;
 			}
 		}
 
-		public Task ExecuteAsync()
+		public InvertSelectionAction()
+		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context?.ShellPage?.SlimContentPage?.ItemManipulationModel?.InvertSelection();
+
 			return Task.CompletedTask;
 		}
 	}

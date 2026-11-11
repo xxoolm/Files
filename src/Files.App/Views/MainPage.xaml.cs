@@ -1,114 +1,112 @@
-using CommunityToolkit.Mvvm.DependencyInjection;
-using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.WinUI.Helpers;
-using CommunityToolkit.WinUI.UI;
-using CommunityToolkit.WinUI.UI.Controls;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.DataModels;
-using Files.App.DataModels.NavigationControlItems;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using Files.App.Helpers;
-using Files.App.UserControls;
-using Files.App.UserControls.MultitaskingControl;
-using Files.App.ViewModels;
-using Files.Backend.Extensions;
-using Files.Backend.Services.Settings;
-using Files.Shared.EventArguments;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using CommunityToolkit.WinUI;
+using Files.App.Actions;
+using Files.App.Controls;
+using Microsoft.Extensions.Logging;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
-using System;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using System.Windows.Input;
-using UWPToWinAppSDKUpgradeHelpers;
-using Windows.ApplicationModel;
-using Windows.Services.Store;
-using Windows.Storage;
-using Windows.System;
+using System.Runtime.InteropServices;
+using Windows.Foundation.Metadata;
+using Windows.Graphics;
+using Windows.UI.Input;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using WinRT;
+using GridSplitter = Files.App.Controls.GridSplitter;
+using VirtualKey = Windows.System.VirtualKey;
 
 namespace Files.App.Views
 {
-	/// <summary>
-	/// The root page of Files
-	/// </summary>
-	public sealed partial class MainPage : Page, INotifyPropertyChanged
+	public sealed partial class MainPage : Page
 	{
-		private VirtualKeyModifiers currentModifiers = VirtualKeyModifiers.None;
+		private IGeneralSettingsService generalSettingsService { get; } = Ioc.Default.GetRequiredService<IGeneralSettingsService>();
+		private readonly IContentPageContext ContentPageContext = Ioc.Default.GetRequiredService<IContentPageContext>();
+		public IUserSettingsService UserSettingsService { get; }
+		private readonly IWindowContext WindowContext = Ioc.Default.GetRequiredService<IWindowContext>();
+		private readonly ICommandManager Commands = Ioc.Default.GetRequiredService<ICommandManager>();
+		public SidebarViewModel SidebarAdaptiveViewModel { get; }
+		public MainPageViewModel ViewModel { get; }
 
-		public IUserSettingsService UserSettingsService { get; } = Ioc.Default.GetRequiredService<IUserSettingsService>();
-		public ICommandManager Commands { get; } = Ioc.Default.GetRequiredService<ICommandManager>();
-		public IWindowContext WindowContext { get; } = Ioc.Default.GetRequiredService<IWindowContext>();
-
-		public AppModel AppModel => App.AppModel;
-
-		public MainPageViewModel ViewModel
-		{
-			get => (MainPageViewModel)DataContext;
-			set => DataContext = value;
-		}
-
-
-		/// <summary>
-		/// True if the user is currently resizing the preview pane
-		/// </summary>
-		private bool draggingPreviewPane;
+		private const int HTCAPTION = 2;
 
 		private bool keyReleased = true;
 
-		public SidebarViewModel SidebarAdaptiveViewModel = new SidebarViewModel();
+		private DispatcherQueueTimer _updateDateDisplayTimer;
+		private WindowMessageMonitor? _titleBarMessageMonitor;
 
-		public readonly OngoingTasksViewModel OngoingTasksViewModel;
+		private readonly Dictionary<TabBarItem, double> _sidebarScrollByTab = new();
+		private TabBarItem? _previousSidebarTab;
 
-		private ICommand ToggleSidebarCollapsedStateCommand => new RelayCommand<KeyboardAcceleratorInvokedEventArgs>(x => ToggleSidebarCollapsedState(x));
-
+		[DynamicWindowsRuntimeCast(typeof(MenuFlyout))]
 		public MainPage()
 		{
 			InitializeComponent();
-			DataContext = Ioc.Default.GetRequiredService<MainPageViewModel>();
-			OngoingTasksViewModel = Ioc.Default.GetRequiredService<OngoingTasksViewModel>();
-			var flowDirectionSetting = new Microsoft.Windows.ApplicationModel.Resources.ResourceManager().CreateResourceContext().QualifierValues["LayoutDirection"];
-			if (flowDirectionSetting == "RTL")
-				FlowDirection = FlowDirection.RightToLeft;
 
+			// Dependency Injection
+			UserSettingsService = Ioc.Default.GetRequiredService<IUserSettingsService>();
+			SidebarAdaptiveViewModel = Ioc.Default.GetRequiredService<SidebarViewModel>();
+			SidebarAdaptiveViewModel.PaneFlyout = (MenuFlyout)Resources["SidebarContextMenu"];
+			ViewModel = Ioc.Default.GetRequiredService<MainPageViewModel>();
+
+			if (AppLanguageHelper.IsPreferredLanguageRtl)
+			{
+				Win32Helper.EnableRtlLayout(MainWindow.Instance.WindowHandle);
+				FlowDirection = FlowDirection.RightToLeft;
+			}
+
+			ViewModel.PropertyChanged += ViewModel_PropertyChanged;
 			UserSettingsService.OnSettingChangedEvent += UserSettingsService_OnSettingChangedEvent;
+			ContentPageContext.PropertyChanged += ContentPageContext_PropertyChanged;
+
+			_updateDateDisplayTimer = DispatcherQueue.CreateTimer();
+			_updateDateDisplayTimer.Interval = TimeSpan.FromSeconds(1);
+			_updateDateDisplayTimer.Tick += UpdateDateDisplayTimer_Tick;
+			App.AppModel.PropertyChanged += AppModel_PropertyChanged;
+
+			ApplySidebarWidthState();
+
+			// Realize the navigation controls before the first measure pass.
+			FindName(nameof(InnerNavigationToolbar));
+			FindName(nameof(TabControl));
+			FindName(nameof(NavToolbar));
 		}
 
-		private async Task PromptForReview()
+		private void NumberedTabKeyboardAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e)
 		{
-			var promptForReviewDialog = new ContentDialog
+			var command = ViewModel.NavigateToNumberedTabKeyboardAcceleratorCommand;
+			if (command.CanExecute(e))
+				command.Execute(e);
+		}
+
+		private async Task AppRunningAsAdminPromptAsync()
+		{
+			var runningAsAdminPrompt = new ContentDialog
 			{
-				Title = "ReviewFiles".ToLocalized(),
-				Content = "ReviewFilesContent".ToLocalized(),
-				PrimaryButtonText = "Yes".ToLocalized(),
-				SecondaryButtonText = "No".ToLocalized()
+				Title = Strings.FilesRunningAsAdmin.ToLocalized(),
+				Content = Strings.FilesRunningAsAdminContent.ToLocalized(),
+				PrimaryButtonText = "Ok".ToLocalized(),
+				SecondaryButtonText = Strings.DontShowAgain.ToLocalized()
 			};
 
-			var result = await SetContentDialogRoot(promptForReviewDialog).ShowAsync();
+			var result = await SetContentDialogRoot(runningAsAdminPrompt).TryShowAsync();
 
-			if (result == ContentDialogResult.Primary)
-			{
-				try
-				{
-					var storeContext = StoreContext.GetDefault();
-					await storeContext.RequestRateAndReviewAppAsync();
-
-					UserSettingsService.ApplicationSettingsService.ClickedToReviewApp = true;
-				}
-				catch (Exception) { }
-			}
+			if (result == ContentDialogResult.Secondary)
+				UserSettingsService.ApplicationSettingsService.ShowRunningAsAdminPrompt = false;
 		}
 
 		// WINUI3
 		private ContentDialog SetContentDialogRoot(ContentDialog contentDialog)
 		{
-			if (Windows.Foundation.Metadata.ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
-				contentDialog.XamlRoot = App.Window.Content.XamlRoot;
+			if (ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
+				contentDialog.XamlRoot = MainWindow.Instance.Content.XamlRoot;
+
 			return contentDialog;
 		}
 
@@ -116,17 +114,20 @@ namespace Files.App.Views
 		{
 			switch (e.SettingName)
 			{
-				case nameof(IPreviewPaneSettingsService.IsEnabled):
+				case nameof(IInfoPaneSettingsService.IsInfoPaneEnabled):
 					LoadPaneChanged();
+					break;
+				case nameof(IAppearanceSettingsService.SidebarWidth):
+					ApplySidebarWidthState();
 					break;
 			}
 		}
 
 		private void HorizontalMultitaskingControl_Loaded(object sender, RoutedEventArgs e)
 		{
-			TabControl.DragArea.SizeChanged += (_, _) => SetRectDragRegion();
-
-			if (ViewModel.MultitaskingControl is not HorizontalMultitaskingControl)
+			TabControl.DragArea.SizeChanged += (_, _) => MainWindow.Instance.RaiseSetTitleBarDragRegion(SetTitleBarDragRegion);
+			TabControl.SizeChanged += (_, _) => MainWindow.Instance.RaiseSetTitleBarDragRegion(SetTitleBarDragRegion);
+			if (ViewModel.MultitaskingControl is not TabBar)
 			{
 				ViewModel.MultitaskingControl = TabControl;
 				ViewModel.MultitaskingControls.Add(TabControl);
@@ -134,83 +135,136 @@ namespace Files.App.Views
 			}
 		}
 
-		private void SetRectDragRegion()
+		private int SetTitleBarDragRegion(InputNonClientPointerSource source, SizeInt32 size, double scaleFactor, Func<UIElement, RectInt32?, RectInt32> getScaledRect)
 		{
-			DragZoneHelper.SetDragZones(App.Window,
-				dragZoneLeftIndent: (int)(TabControl.ActualWidth + TabControl.Margin.Left - TabControl.DragArea.ActualWidth));
+			if (TabControl is null)
+				return -1;
+
+			var height = (int)TabControl.ActualHeight;
+			source.SetRegionRects(NonClientRegionKind.Passthrough, [getScaledRect(this, new RectInt32(0, 0, (int)(TabControl.ActualWidth + TabControl.Margin.Left - TabControl.DragArea.ActualWidth), height))]);
+			AttachTitleBarMessageMonitor();
+			return height;
 		}
 
-		public void TabItemContent_ContentChanged(object? sender, TabItemArguments e)
+		// Caption regions live in a dedicated child window
+		private void AttachTitleBarMessageMonitor()
+		{
+			if (_titleBarMessageMonitor is not null)
+				return;
+
+			var titleBarHwnd = PInvoke.FindWindowEx(new(MainWindow.Instance.WindowHandle), HWND.Null, "InputNonClientPointerSource", null);
+			if (titleBarHwnd.IsNull)
+				return;
+
+			_titleBarMessageMonitor = new WindowMessageMonitor(titleBarHwnd);
+			_titleBarMessageMonitor.WindowMessageReceived += TitleBar_WindowMessageReceived;
+		}
+
+		private void TitleBar_WindowMessageReceived(object? sender, WindowMessageEventArgs e)
+		{
+			if (e.Message.MessageId is not (PInvoke.WM_NCMBUTTONDOWN or PInvoke.WM_NCMBUTTONDBLCLK) ||
+				(int)e.Message.WParam != HTCAPTION || TabControl is null)
+				return;
+
+			// Deferred because this runs inside the window procedure
+			DispatcherQueue.TryEnqueue(async () => await Commands.NewTab.ExecuteAsync());
+
+			e.Result = 0;
+			e.Handled = true;
+		}
+
+		public async void TabItemContent_ContentChanged(object? sender, TabBarItemParameter e)
 		{
 			if (SidebarAdaptiveViewModel.PaneHolder is null)
 				return;
 
-			var paneArgs = e.NavigationArg as PaneNavigationArguments;
+			var paneArgs = e.NavigationParameter as PaneNavigationArguments;
 			SidebarAdaptiveViewModel.UpdateSidebarSelectedItemFromArgs(SidebarAdaptiveViewModel.PaneHolder.IsLeftPaneActive ?
-				paneArgs.LeftPaneNavPathParam : paneArgs.RightPaneNavPathParam);
-			UpdateStatusBarProperties();
+				paneArgs?.LeftPaneNavPathParam : paneArgs?.RightPaneNavPathParam);
+
 			LoadPaneChanged();
 			UpdateNavToolbarProperties();
-			ViewModel.UpdateInstanceProperties(paneArgs);
+			await NavigationHelpers.UpdateInstancePropertiesAsync(paneArgs);
+
+			// Save the updated tab list
+			AppLifecycleHelper.SaveSessionTabs();
 		}
 
-		public void MultitaskingControl_CurrentInstanceChanged(object? sender, CurrentInstanceChangedEventArgs e)
+
+		public async void MultitaskingControl_CurrentInstanceChanged(object? sender, CurrentInstanceChangedEventArgs e)
 		{
-			if (SidebarAdaptiveViewModel.PaneHolder is not null)
+			// Add null check for the event args and CurrentInstance
+			if (e?.CurrentInstance == null)
+				return;
+
+			// Safely unsubscribe from previous instance
+			if (SidebarAdaptiveViewModel?.PaneHolder is not null)
 				SidebarAdaptiveViewModel.PaneHolder.PropertyChanged -= PaneHolder_PropertyChanged;
 
-			var navArgs = e.CurrentInstance.TabItemArguments?.NavigationArg;
-			SidebarAdaptiveViewModel.PaneHolder = e.CurrentInstance as IPaneHolder;
-			SidebarAdaptiveViewModel.PaneHolder.PropertyChanged += PaneHolder_PropertyChanged;
-			SidebarAdaptiveViewModel.NotifyInstanceRelatedPropertiesChanged((navArgs as PaneNavigationArguments).LeftPaneNavPathParam);
-			UpdateStatusBarProperties();
+			var navArgs = e.CurrentInstance.TabBarItemParameter?.NavigationParameter;
+
+			if (e.CurrentInstance is IShellPanesPage currentInstance && SidebarAdaptiveViewModel != null)
+			{
+				SidebarAdaptiveViewModel.PaneHolder = currentInstance;
+				SidebarAdaptiveViewModel.PaneHolder.PropertyChanged += PaneHolder_PropertyChanged;
+			}
+
+			SidebarAdaptiveViewModel?.NotifyInstanceRelatedPropertiesChanged((navArgs as PaneNavigationArguments)?.LeftPaneNavPathParam);
+
+			// Safely access nested properties with null checks
+			var statusBarViewModel = SidebarAdaptiveViewModel?.PaneHolder?.ActivePaneOrColumn?.SlimContentPage?.StatusBarViewModel;
+			if (statusBarViewModel is not null)
+				statusBarViewModel.ShowLocals = true;
+
 			UpdateNavToolbarProperties();
 			LoadPaneChanged();
-			ViewModel.UpdateInstanceProperties(navArgs);
+
 			e.CurrentInstance.ContentChanged -= TabItemContent_ContentChanged;
 			e.CurrentInstance.ContentChanged += TabItemContent_ContentChanged;
+
+			await NavigationHelpers.UpdateInstancePropertiesAsync(navArgs);
+
+			// Focus the content of the selected tab item (this also avoids an issue where the Omnibar sometimes steals the focus)
+			await Task.Delay(100);
+			if (!App.AppModel.IsMainWindowClosed && ContentPageContext?.ShellPage?.PaneHolder != null)
+				ContentPageContext.ShellPage.PaneHolder.FocusActivePane();
 		}
 
 		private void PaneHolder_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			SidebarAdaptiveViewModel.NotifyInstanceRelatedPropertiesChanged(SidebarAdaptiveViewModel.PaneHolder.ActivePane?.TabItemArguments?.NavigationArg?.ToString());
-			UpdateStatusBarProperties();
+			SidebarAdaptiveViewModel.NotifyInstanceRelatedPropertiesChanged(SidebarAdaptiveViewModel.PaneHolder?.ActivePane?.TabBarItemParameter?.NavigationParameter?.ToString());
 			UpdateNavToolbarProperties();
 			LoadPaneChanged();
 		}
 
-		private void UpdateStatusBarProperties()
+		private void ContentPageContext_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			if (StatusBarControl is not null)
-			{
-				StatusBarControl.DirectoryPropertiesViewModel = SidebarAdaptiveViewModel.PaneHolder?.ActivePaneOrColumn.SlimContentPage?.DirectoryPropertiesViewModel;
-				StatusBarControl.SelectedItemsPropertiesViewModel = SidebarAdaptiveViewModel.PaneHolder?.ActivePaneOrColumn.SlimContentPage?.SelectedItemsPropertiesViewModel;
-			}
+			if (e.PropertyName is nameof(IContentPageContext.PageType))
+				LoadPaneChanged();
 		}
 
 		private void UpdateNavToolbarProperties()
 		{
+			var toolbarViewModel = SidebarAdaptiveViewModel.PaneHolder?.ActivePaneOrColumn!.ToolbarViewModel;
+
 			if (NavToolbar is not null)
-				NavToolbar.ViewModel = SidebarAdaptiveViewModel.PaneHolder?.ActivePaneOrColumn.ToolbarViewModel;
+				NavToolbar.ViewModel = toolbarViewModel;
 
 			if (InnerNavigationToolbar is not null)
-			{
-				InnerNavigationToolbar.ViewModel = SidebarAdaptiveViewModel.PaneHolder?.ActivePaneOrColumn.ToolbarViewModel;
-				InnerNavigationToolbar.ShowMultiPaneControls = SidebarAdaptiveViewModel.PaneHolder?.IsMultiPaneEnabled ?? false;
-				InnerNavigationToolbar.IsMultiPaneActive = SidebarAdaptiveViewModel.PaneHolder?.IsMultiPaneActive ?? false;
-			}
+				InnerNavigationToolbar.ViewModel = toolbarViewModel;
 		}
 
 		protected override void OnNavigatedTo(NavigationEventArgs e)
 		{
-			ViewModel.OnNavigatedTo(e);
-			SidebarControl.SidebarItemInvoked += SidebarControl_SidebarItemInvoked;
-			SidebarControl.SidebarItemPropertiesInvoked += SidebarControl_SidebarItemPropertiesInvoked;
-			SidebarControl.SidebarItemDropped += SidebarControl_SidebarItemDropped;
-			SidebarControl.SidebarItemNewPaneInvoked += SidebarControl_SidebarItemNewPaneInvoked;
+			_ = ViewModel.OnNavigatedToAsync(e);
 		}
 
-		protected override async void OnPreviewKeyDown(KeyRoutedEventArgs e)
+		protected override async void OnPreviewKeyDown(KeyRoutedEventArgs e) => await OnPreviewKeyDownAsync(e);
+
+		[DynamicWindowsRuntimeCast(typeof(DependencyObject))]
+		[DynamicWindowsRuntimeCast(typeof(TextBlock))]
+		[DynamicWindowsRuntimeCast(typeof(FrameworkElement))]
+		private async Task OnPreviewKeyDownAsync(KeyRoutedEventArgs e)
 		{
 			base.OnPreviewKeyDown(e);
 
@@ -224,24 +278,29 @@ namespace Files.App.Views
 					break;
 				default:
 					var currentModifiers = HotKeyHelpers.GetCurrentKeyModifiers();
-					HotKey hotKey = new(e.Key, currentModifiers);
+					HotKey hotKey = new((Keys)e.Key, currentModifiers);
+					var source = e.OriginalSource as DependencyObject;
 
 					// A textbox takes precedence over certain hotkeys.
-					bool isTextBox = e.OriginalSource is DependencyObject source && source.FindAscendantOrSelf<TextBox>() is not null;
-					if (isTextBox)
-					{
-						if (hotKey.IsTextBoxHotKey())
-						{
-							break;
-						}
-						if (currentModifiers is VirtualKeyModifiers.None && !e.Key.IsGlobalKey())
-						{
-							break;
-						}
-					}
+					if (source?.FindAscendantOrSelf<TextBox>() is not null)
+						break;
 
 					// Execute command for hotkey
 					var command = Commands[hotKey];
+
+					// The "@" key depends on the active keyboard layout
+					if (command.Code is CommandCodes.None && !Commands.GoToFolderAlias.IsCustomHotKeys && GoToFolderAliasAction.IsAtHotKey(hotKey))
+						command = Commands.GoToFolderAlias;
+					else if (command.Code is CommandCodes.GoToFolderAlias && !command.IsCustomHotKeys && !GoToFolderAliasAction.IsAtHotKey(hotKey))
+						break;
+
+					if (command.Code is CommandCodes.OpenItem && (source?.FindAscendantOrSelf<Omnibar>() is not null || source?.FindAscendantOrSelf<AppBarButton>() is not null))
+						break;
+
+					// Prevent ctrl + c from overriding copy in textblocks 					
+					if (currentModifiers == KeyModifiers.Ctrl && e.Key is VirtualKey.C && (FrameworkElement)FocusManager.GetFocusedElement(MainWindow.Instance.Content.XamlRoot) is TextBlock)
+						break;
+
 					if (command.Code is not CommandCodes.None && keyReleased)
 					{
 						keyReleased = false;
@@ -278,269 +337,206 @@ namespace Files.App.Views
 			keyReleased = true;
 		}
 
-		private async void SidebarControl_SidebarItemDropped(object sender, SidebarItemDroppedEventArgs e)
-		{
-			await SidebarAdaptiveViewModel.FilesystemHelpers.PerformOperationTypeAsync(e.AcceptedOperation, e.Package, e.ItemPath, false, true);
-			e.SignalEvent?.Set();
-		}
-
-		private async void SidebarControl_SidebarItemPropertiesInvoked(object sender, SidebarItemPropertiesInvokedEventArgs e)
-		{
-			if (e.InvokedItemDataContext is DriveItem)
-			{
-				await FilePropertiesHelpers.OpenPropertiesWindowAsync(e.InvokedItemDataContext, SidebarAdaptiveViewModel.PaneHolder.ActivePane);
-			}
-			else if (e.InvokedItemDataContext is LibraryLocationItem library)
-			{
-				await FilePropertiesHelpers.OpenPropertiesWindowAsync(new LibraryItem(library), SidebarAdaptiveViewModel.PaneHolder.ActivePane);
-			}
-			else if (e.InvokedItemDataContext is LocationItem locationItem)
-			{
-				ListedItem listedItem = new ListedItem(null!)
-				{
-					ItemPath = locationItem.Path,
-					ItemNameRaw = locationItem.Text,
-					PrimaryItemAttribute = StorageItemTypes.Folder,
-					ItemType = "Folder".GetLocalizedResource(),
-				};
-				await FilePropertiesHelpers.OpenPropertiesWindowAsync(listedItem, SidebarAdaptiveViewModel.PaneHolder.ActivePane);
-			}
-		}
-
-		private void SidebarControl_SidebarItemNewPaneInvoked(object sender, SidebarItemNewPaneInvokedEventArgs e)
-		{
-			if (e.InvokedItemDataContext is INavigationControlItem navItem)
-				SidebarAdaptiveViewModel.PaneHolder.OpenPathInNewPane(navItem.Path);
-		}
-
-		private void SidebarControl_SidebarItemInvoked(object sender, SidebarItemInvokedEventArgs e)
-		{
-			var invokedItemContainer = e.InvokedItemContainer;
-
-			string? navigationPath; // path to navigate
-			Type? sourcePageType = null; // type of page to navigate
-
-			switch ((invokedItemContainer.DataContext as INavigationControlItem)?.ItemType)
-			{
-				case NavigationControlItemType.Location:
-					{
-						var ItemPath = (invokedItemContainer.DataContext as INavigationControlItem)?.Path; // Get the path of the invoked item
-
-						if (string.IsNullOrEmpty(ItemPath)) // Section item
-						{
-							navigationPath = invokedItemContainer.Tag?.ToString();
-						}
-						else if (ItemPath.Equals("Home", StringComparison.OrdinalIgnoreCase)) // Home item
-						{
-							if (ItemPath.Equals(SidebarAdaptiveViewModel.SidebarSelectedItem?.Path, StringComparison.OrdinalIgnoreCase))
-								return; // return if already selected
-
-							navigationPath = "Home";
-							sourcePageType = typeof(WidgetsPage);
-						}
-						else // Any other item
-						{
-							navigationPath = invokedItemContainer.Tag?.ToString();
-						}
-
-						break;
-					}
-
-				case NavigationControlItemType.FileTag:
-					var tagPath = (invokedItemContainer.DataContext as INavigationControlItem)?.Path; // Get the path of the invoked item
-					if (SidebarAdaptiveViewModel.PaneHolder?.ActivePane is IShellPage shp)
-					{
-						shp.NavigateToPath(tagPath, new NavigationArguments()
-						{
-							IsSearchResultPage = true,
-							SearchPathParam = "Home",
-							SearchQuery = tagPath,
-							AssociatedTabInstance = shp,
-							NavPathParam = tagPath
-						});
-					}
-					return;
-
-				default:
-					{
-						navigationPath = invokedItemContainer.Tag?.ToString();
-						break;
-					}
-			}
-
-			if (SidebarAdaptiveViewModel.PaneHolder?.ActivePane is IShellPage shellPage)
-				shellPage.NavigateToPath(navigationPath, sourcePageType);
-		}
-
 		private void Page_Loaded(object sender, RoutedEventArgs e)
 		{
-			// Defers the status bar loading until after the page has loaded to improve startup perf
-			FindName(nameof(StatusBarControl));
-			FindName(nameof(InnerNavigationToolbar));
-			FindName(nameof(TabControl));
-			FindName(nameof(NavToolbar));
+			ViewModel.OnPageLoaded();
 
-			if (Package.Current.Id.Name != "49306atecsolution.FilesUWP" || UserSettingsService.ApplicationSettingsService.ClickedToReviewApp)
+			MainWindow.Instance.AppWindow.Changed += (_, _) => MainWindow.Instance.RaiseSetTitleBarDragRegion(SetTitleBarDragRegion);
+
+			MainWindow.Instance.RaiseSetTitleBarDragRegion(SetTitleBarDragRegion);
+
+			// Notify user that drag and drop is disabled
+			// Prompt is disabled in the dev environment to prevent issues with the automation testing 
+			// ToDo put this in a StartupPromptService
+			if
+			(
+				AppLifecycleHelper.AppEnvironment is not AppEnvironment.Dev &&
+				WindowContext.IsRunningAsAdmin &&
+				UserSettingsService.ApplicationSettingsService.ShowRunningAsAdminPrompt
+			)
+			{
+				DispatcherQueue.TryEnqueue(async () => await AppRunningAsAdminPromptAsync());
+			}
+		}
+
+		private void PreviewPane_Loaded(object sender, RoutedEventArgs e)
+		{
+			_updateDateDisplayTimer.Start();
+		}
+
+		private void PreviewPane_Unloaded(object sender, RoutedEventArgs e)
+		{
+			_updateDateDisplayTimer.Stop();
+		}
+
+		private void UpdateDateDisplayTimer_Tick(object sender, object e)
+		{
+			if (!App.AppModel.IsMainWindowClosed)
+				InfoPane?.ViewModel.UpdateDateDisplay();
+			else
+				App.Logger.LogWarning("UpdateDateDisplayTimer_Tick: Timer firing after window closed!");
+		}
+
+		private void AppModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+		{
+			if (e.PropertyName != nameof(AppModel.IsMainWindowClosed))
 				return;
 
-			var totalLaunchCount = SystemInformation.Instance.TotalLaunchCount;
-			if (totalLaunchCount is 10 or 20 or 30 or 40 or 50)
-			{
-				// Prompt user to review app in the Store
-				DispatcherQueue.TryEnqueue(async () => await PromptForReview());
-			}
+			// Ticks dispatched during dispatcher queue shutdown crash in CoreMessaging
+			if (App.AppModel.IsMainWindowClosed)
+				_updateDateDisplayTimer.Stop();
+			else if (InfoPane is not null && InfoPane.IsLoaded)
+				_updateDateDisplayTimer.Start();
 		}
 
 		private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
 		{
-			switch (PreviewPane?.Position)
+			switch (InfoPane?.Position)
 			{
 				case PreviewPanePositions.Right when ContentColumn.ActualWidth == ContentColumn.MinWidth:
-					UserSettingsService.PreviewPaneSettingsService.VerticalSizePx += e.NewSize.Width - e.PreviousSize.Width;
+					UserSettingsService.InfoPaneSettingsService.VerticalSizePx += e.NewSize.Width - e.PreviousSize.Width;
 					UpdatePositioning();
 					break;
 				case PreviewPanePositions.Bottom when ContentRow.ActualHeight == ContentRow.MinHeight:
-					UserSettingsService.PreviewPaneSettingsService.HorizontalSizePx += e.NewSize.Height - e.PreviousSize.Height;
+					UserSettingsService.InfoPaneSettingsService.HorizontalSizePx += e.NewSize.Height - e.PreviousSize.Height;
 					UpdatePositioning();
 					break;
 			}
-		}
-
-		private void ToggleSidebarCollapsedState(KeyboardAcceleratorInvokedEventArgs? e)
-		{
-			SidebarAdaptiveViewModel.IsSidebarOpen = !SidebarAdaptiveViewModel.IsSidebarOpen;
-			e!.Handled = true;
 		}
 
 		private void SidebarControl_Loaded(object sender, RoutedEventArgs e)
 		{
-			SidebarAdaptiveViewModel.UpdateTabControlMargin(); // Set the correct tab margin on startup
+			// Set the correct tab margin on startup
+			SidebarAdaptiveViewModel.UpdateTabControlMargin();
+			SidebarAdaptiveViewModel.EnsureTabExpansionTrackingInitialized();
+
+			SidebarControl.HoverToOpenDelay = TimeSpan.FromMilliseconds(Constants.DragAndDrop.HoverToOpenTimespan);
+			SidebarControl.HoverToExpandDelay = TimeSpan.FromMilliseconds(Constants.DragAndDrop.HoverToExpandTimespan);
+
+			// VM.SidebarDisplayMode rejects Minimal (it only tracks user preference) so the flat tree mirrors SidebarView.DisplayMode separately.
+			SidebarAdaptiveViewModel.ActualDisplayMode = SidebarControl.DisplayMode;
+			SidebarControl.RegisterPropertyChangedCallback(SidebarView.DisplayModeProperty, (_, _) =>
+				SidebarAdaptiveViewModel.ActualDisplayMode = SidebarControl.DisplayMode);
 		}
 
 		private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e) => LoadPaneChanged();
 
-		/// <summary>
-		/// Call this function to update the positioning of the preview pane.
-		/// This is a workaround as the VisualStateManager causes problems.
-		/// </summary>
 		private void UpdatePositioning()
 		{
-			if (PreviewPane is null || !ShouldPreviewPaneBeActive)
+			if (InfoPane is null || !ViewModel.ShouldPreviewPaneBeActive)
 			{
-				PaneRow.MinHeight = 0;
-				PaneRow.MaxHeight = double.MaxValue;
-				PaneRow.Height = new GridLength(0);
-				PaneColumn.MinWidth = 0;
-				PaneColumn.MaxWidth = double.MaxValue;
-				PaneColumn.Width = new GridLength(0);
+				VisualStateManager.GoToState(this, "InfoPanePositionNone", true);
 			}
 			else
 			{
-				PreviewPane.UpdatePosition(RootGrid.ActualWidth, RootGrid.ActualHeight);
-				switch (PreviewPane.Position)
+				InfoPane.UpdatePosition(RootGrid.ActualWidth, RootGrid.ActualHeight);
+				switch (InfoPane.Position)
 				{
 					case PreviewPanePositions.None:
-						PaneRow.MinHeight = 0;
-						PaneRow.Height = new GridLength(0);
-						PaneColumn.MinWidth = 0;
-						PaneColumn.Width = new GridLength(0);
+						VisualStateManager.GoToState(this, "InfoPanePositionNone", true);
 						break;
 					case PreviewPanePositions.Right:
-						PreviewPane.SetValue(Grid.RowProperty, 1);
-						PreviewPane.SetValue(Grid.ColumnProperty, 2);
-						PaneSplitter.SetValue(Grid.RowProperty, 1);
-						PaneSplitter.SetValue(Grid.ColumnProperty, 1);
-						PaneSplitter.Width = 2;
-						PaneSplitter.Height = RootGrid.ActualHeight;
-						PaneSplitter.GripperCursor = GridSplitter.GripperCursorType.SizeWestEast;
-						PaneColumn.MinWidth = PreviewPane.MinWidth;
-						PaneColumn.MaxWidth = PreviewPane.MaxWidth;
-						PaneColumn.Width = new GridLength(UserSettingsService.PreviewPaneSettingsService.VerticalSizePx, GridUnitType.Pixel);
-						PaneRow.MinHeight = 0;
-						PaneRow.MaxHeight = double.MaxValue;
-						PaneRow.Height = new GridLength(0);
+						InfoPaneSizer.ChangeCursor(InputSystemCursor.Create(InputSystemCursorShape.SizeWestEast));
+						InfoPaneColumnDefinition.Width = new(UserSettingsService.InfoPaneSettingsService.VerticalSizePx);
+						VisualStateManager.GoToState(this, "InfoPanePositionRight", true);
 						break;
 					case PreviewPanePositions.Bottom:
-						PreviewPane.SetValue(Grid.RowProperty, 3);
-						PreviewPane.SetValue(Grid.ColumnProperty, 0);
-						PaneSplitter.SetValue(Grid.RowProperty, 2);
-						PaneSplitter.SetValue(Grid.ColumnProperty, 0);
-						PaneSplitter.Height = 2;
-						PaneSplitter.Width = RootGrid.ActualWidth;
-						PaneSplitter.GripperCursor = GridSplitter.GripperCursorType.SizeNorthSouth;
-						PaneColumn.MinWidth = 0;
-						PaneColumn.MaxWidth = double.MaxValue;
-						PaneColumn.Width = new GridLength(0);
-						PaneRow.MinHeight = PreviewPane.MinHeight;
-						PaneRow.MaxHeight = PreviewPane.MaxHeight;
-						PaneRow.Height = new GridLength(UserSettingsService.PreviewPaneSettingsService.HorizontalSizePx, GridUnitType.Pixel);
+						InfoPaneSizer.ChangeCursor(InputSystemCursor.Create(InputSystemCursorShape.SizeNorthSouth));
+						InfoPaneRowDefinition.Height = new(UserSettingsService.InfoPaneSettingsService.HorizontalSizePx);
+						VisualStateManager.GoToState(this, "InfoPanePositionBottom", true);
 						break;
 				}
 			}
 		}
 
-		private void PaneSplitter_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
-		{
-			draggingPreviewPane = true;
-		}
-
 		private void PaneSplitter_ManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
 		{
-			switch (PreviewPane?.Position)
+			switch (InfoPane?.Position)
 			{
 				case PreviewPanePositions.Right:
-					UserSettingsService.PreviewPaneSettingsService.VerticalSizePx = PreviewPane.ActualWidth;
+					UserSettingsService.InfoPaneSettingsService.VerticalSizePx = InfoPane.ActualWidth;
 					break;
 				case PreviewPanePositions.Bottom:
-					UserSettingsService.PreviewPaneSettingsService.HorizontalSizePx = PreviewPane.ActualHeight;
+					UserSettingsService.InfoPaneSettingsService.HorizontalSizePx = InfoPane.ActualHeight;
 					break;
 			}
 
-			draggingPreviewPane = false;
+			this.ChangeCursor(InputSystemCursor.Create(InputSystemCursorShape.Arrow));
 		}
 
-		private void PaneSplitter_PointerExited(object sender, PointerRoutedEventArgs e)
+		private void ApplySidebarWidthState()
 		{
-			if (draggingPreviewPane)
-				return;
-
-			var paneSplitter = (GridSplitter)sender;
-			paneSplitter.ChangeCursor(InputSystemCursor.Create(InputSystemCursorShape.Arrow));
-		}
-
-		private void PaneSplitter_PointerEntered(object sender, PointerRoutedEventArgs e)
-		{
-			var paneSplitter = (GridSplitter)sender;
-			paneSplitter.ChangeCursor(InputSystemCursor.Create(InputSystemCursorShape.SizeWestEast));
-		}
-
-		public bool ShouldPreviewPaneBeActive => UserSettingsService.PreviewPaneSettingsService.IsEnabled && ShouldPreviewPaneBeDisplayed;
-
-		public bool ShouldPreviewPaneBeDisplayed
-		{
-			get
-			{
-				var isHomePage = !(SidebarAdaptiveViewModel.PaneHolder?.ActivePane?.InstanceViewModel?.IsPageTypeNotHome ?? false);
-				var isMultiPane = SidebarAdaptiveViewModel.PaneHolder?.IsMultiPaneActive ?? false;
-				var isBigEnough = App.Window.Bounds.Width > 450 && App.Window.Bounds.Height > 400;
-				var isEnabled = (!isHomePage || isMultiPane) && isBigEnough;
-
-				return isEnabled;
-			}
+			if (UserSettingsService.AppearanceSettingsService.SidebarWidth > 360)
+				VisualStateManager.GoToState(this, "LargeSidebarWidthState", true);
+			else if (UserSettingsService.AppearanceSettingsService.SidebarWidth > 280)
+				VisualStateManager.GoToState(this, "MediumSidebarWidthState", true);
+			else
+				VisualStateManager.GoToState(this, "SmallSidebarWidthState", true);
 		}
 
 		private void LoadPaneChanged()
 		{
-			OnPropertyChanged(nameof(ShouldPreviewPaneBeActive));
-			OnPropertyChanged(nameof(ShouldPreviewPaneBeDisplayed));
-			UpdatePositioning();
+			try
+			{
+				var isHomePage = !(SidebarAdaptiveViewModel.PaneHolder?.ActivePane?.InstanceViewModel?.IsPageTypeNotHome ?? false);
+				var isReleaseNotesPage = SidebarAdaptiveViewModel.PaneHolder?.ActivePane?.InstanceViewModel?.IsPageTypeReleaseNotes ?? false;
+				var isSettingsPage = SidebarAdaptiveViewModel.PaneHolder?.ActivePane?.InstanceViewModel?.IsPageTypeSettings ?? false;
+				var isMultiPane = SidebarAdaptiveViewModel.PaneHolder?.IsMultiPaneActive ?? false;
+				var isBigEnough = !App.AppModel.IsMainWindowClosed &&
+					(MainWindow.Instance.Bounds.Width > 450 && MainWindow.Instance.Bounds.Height > 450 || RootGrid.ActualWidth > 700 && MainWindow.Instance.Bounds.Height > 360);
+
+				ViewModel.ShouldPreviewPaneBeDisplayed = ((!isHomePage && !isReleaseNotesPage && !isSettingsPage) || isMultiPane) && isBigEnough;
+				ViewModel.ShouldPreviewPaneBeActive = UserSettingsService.InfoPaneSettingsService.IsInfoPaneEnabled && ViewModel.ShouldPreviewPaneBeDisplayed;
+
+				UpdatePositioning();
+			}
+			catch (Exception ex)
+			{
+				// Handle exception in case WinUI Windows is closed
+				// (see https://github.com/files-community/Files/issues/15599)
+
+				App.Logger.LogWarning(ex, ex.Message);
+			}
 		}
 
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string propertyName = "")
+		private async void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+			if (e.PropertyName == nameof(ViewModel.ShouldPreviewPaneBeActive))
+			{
+				var infoPaneViewModel = Ioc.Default.GetRequiredService<InfoPaneViewModel>();
+				if (ViewModel.ShouldPreviewPaneBeActive)
+					await infoPaneViewModel.UpdateSelectedItemPreviewAsync();
+				else
+					infoPaneViewModel.UnloadPreview();
+			}
+			else if (e.PropertyName == nameof(ViewModel.SelectedTabItem))
+				HandleSidebarTabChange();
+		}
+
+		private void HandleSidebarTabChange()
+		{
+			if (_previousSidebarTab is not null)
+				_sidebarScrollByTab[_previousSidebarTab] = SidebarControl.VerticalScrollOffset;
+
+			var newTab = ViewModel.SelectedTabItem;
+			_previousSidebarTab = newTab;
+
+			if (newTab is null)
+				return;
+
+			var savedOffset = _sidebarScrollByTab.GetValueOrDefault(newTab);
+			// Defer to after the flat-tree's tab-state restoration dispatcher work so the content extent has caught up before scrolling.
+			DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () => SidebarControl.ScrollToVerticalOffset(savedOffset));
+		}
+
+		internal void DetachTabContent(TabBarItem tabItem)
+		{
+			if (ReferenceEquals(PageContent.Content, tabItem.ContentFrame))
+				PageContent.Content = null;
+
+			_sidebarScrollByTab.Remove(tabItem);
+			if (ReferenceEquals(_previousSidebarTab, tabItem))
+				_previousSidebarTab = null;
 		}
 
 		private void RootGrid_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
@@ -555,7 +551,7 @@ namespace Files.App.Views
 					break;
 				default:
 					var currentModifiers = HotKeyHelpers.GetCurrentKeyModifiers();
-					HotKey hotKey = new(e.Key, currentModifiers);
+					HotKey hotKey = new((Keys)e.Key, currentModifiers);
 
 					// Prevents the arrow key events from navigating the list instead of switching compact overlay
 					if (Commands[hotKey].Code is CommandCodes.EnterCompactOverlay or CommandCodes.ExitCompactOverlay)
@@ -565,5 +561,71 @@ namespace Files.App.Views
 		}
 
 		private void NavToolbar_Loaded(object sender, RoutedEventArgs e) => UpdateNavToolbarProperties();
+
+		private void PaneSplitter_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
+		{
+			this.ChangeCursor(InputSystemCursor.Create(InfoPane.Position == PreviewPanePositions.Right ?
+				InputSystemCursorShape.SizeWestEast : InputSystemCursorShape.SizeNorthSouth));
+		}
+
+		private void SettingsButton_AccessKeyInvoked(UIElement sender, AccessKeyInvokedEventArgs args)
+		{
+			// Suppress access key invocation if any dialog is open
+			if (VisualTreeHelper.GetOpenPopupsForXamlRoot(MainWindow.Instance.Content.XamlRoot).Any())
+				args.Handled = true;
+		}
+
+		private void Page_PointerReleased(object sender, PointerRoutedEventArgs e)
+		{
+			// Workaround for issue where clicking an empty area in the window (toolbar, title bar etc) prevents keyboard
+			// shortcuts from working properly, see https://github.com/microsoft/microsoft-ui-xaml/issues/6467
+			DispatcherQueue.TryEnqueue(() => ContentPageContext.ShellPage?.PaneHolder?.FocusActivePane());
+		}
+
+		private void SidebarControl_ItemContextInvoked(object sender, ItemContextInvokedArgs e)
+		{
+			SidebarAdaptiveViewModel.HandleItemContextInvokedAsync(sender, e);
+		}
+
+		private void SidebarControl_ItemDragOver(object sender, ItemDragOverEventArgs e)
+		{
+			e.DeferUntil(SafetyExtensions.IgnoreExceptions(async () =>
+			{
+				await SidebarAdaptiveViewModel.HandleItemDragOverAsync(e);
+			}, App.Logger));
+		}
+
+		private async void SidebarControl_ItemDropped(object sender, ItemDroppedEventArgs e)
+		{
+			// GetDeferral()/Complete() can throw COMException if the underlying drag operation has already been released (e.g. canceled by the system or window closed)
+			var deferral = SafetyExtensions.IgnoreExceptions(() => e.RawEvent.GetDeferral(), App.Logger);
+
+			await SafetyExtensions.IgnoreExceptions(async () =>
+			{
+				await SidebarAdaptiveViewModel.HandleItemDroppedAsync(e);
+			}, App.Logger);
+
+			if (deferral is not null)
+				SafetyExtensions.IgnoreExceptions(() => deferral.Complete(), App.Logger);
+		}
+
+		private void SidebarControl_ItemInvoked(object sender, ItemInvokedEventArgs e)
+		{
+			if (sender is not SidebarItem { Item: ISidebarItemModel item })
+				return;
+
+			if (item is INavigationControlItem navItem &&
+				string.Equals(navItem.Path, "Settings", StringComparison.OrdinalIgnoreCase))
+				_ = AnimateSettingsIconAsync();
+
+			SidebarAdaptiveViewModel.HandleItemInvokedAsync(item, e.PointerUpdateKind);
+		}
+
+		private async Task AnimateSettingsIconAsync()
+		{
+			AnimatedIcon.SetState(SettingAnimatedIcon, "Pressed");
+			await Task.Delay(140);
+			AnimatedIcon.SetState(SettingAnimatedIcon, "Normal");
+		}
 	}
 }

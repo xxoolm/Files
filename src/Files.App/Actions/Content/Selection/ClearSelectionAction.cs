@@ -1,20 +1,24 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class ClearSelectionAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class ClearSelectionAction : IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "ClearSelection".GetLocalizedResource();
+		public string Label
+			=> Strings.ClearSelection.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.ClearSelectionDescription.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new("\uE8E6");
+		public ActionCategory Category
+			=> ActionCategory.Selection;
+
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.SelectNone");
 
 		public bool IsExecutable
 		{
@@ -30,16 +34,21 @@ namespace Files.App.Actions
 				if (page is null)
 					return false;
 
-				bool isEditing = page.ToolbarViewModel.IsEditModeEnabled;
-				bool isRenaming = page.SlimContentPage.IsRenamingItem;
+				bool isRenaming = page.SlimContentPage?.IsRenamingItem ?? false;
 
-				return !isEditing && !isRenaming;
+				return !isRenaming;
 			}
 		}
 
-		public Task ExecuteAsync()
+		public ClearSelectionAction()
+		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context.ShellPage?.SlimContentPage?.ItemManipulationModel?.ClearSelection();
+
 			return Task.CompletedTask;
 		}
 	}

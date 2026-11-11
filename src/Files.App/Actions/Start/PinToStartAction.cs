@@ -1,32 +1,70 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class PinToStartAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class PinToStartAction : IAction
 	{
-		public IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private IStorageService StorageService { get; } = Ioc.Default.GetRequiredService<IStorageService>();
 
-		public string Label { get; } = "PinItemToStart/Text".GetLocalizedResource();
+		private IStartMenuService StartMenuService { get; } = Ioc.Default.GetRequiredService<IStartMenuService>();
 
-		public string Description => "TODO: Need to be described.";
+		public IContentPageContext context;
 
-		public RichGlyph Glyph { get; } = new RichGlyph(opacityStyle: "ColorIconPinToFavorites");
+		public string Label
+			=> Strings.PinItemToStartText.GetLocalizedResource();
 
-		public async Task ExecuteAsync()
+		public string Description
+			=> Strings.PinToStartDescription.GetLocalizedFormatResource(context.HasSelection ? context.SelectedItems.Count : 1);
+
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.FavoritePin");
+
+		public ActionCategory Category
+			=> ActionCategory.Start;
+
+		public bool IsExecutable =>
+			context.ShellPage is not null;
+
+		public PinToStartAction()
 		{
-			if (context.SelectedItems.Count > 0)
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		}
+
+		public async Task ExecuteAsync(object? parameter = null)
+		{
+			if (context.SelectedItems.Count > 0 && context.ShellPage?.SlimContentPage?.SelectedItems is not null)
 			{
-				foreach (ListedItem listedItem in context.ShellPage?.SlimContentPage.SelectedItems)
-					await App.SecondaryTileHelper.TryPinFolderAsync(listedItem.ItemPath, listedItem.Name);
+				foreach (ListedItem listedItem in context.ShellPage.SlimContentPage.SelectedItems)
+				{
+					await SafetyExtensions.IgnoreExceptions(async () =>
+					{
+						var itemPath = listedItem.GetRequiredPath();
+						IStorable storable = listedItem switch
+						{
+							// Archives are marked as folders when browsable in-app but are files on disk
+							{ IsFolder: true, IsArchive: false } => await StorageService.GetFolderAsync(itemPath),
+							_ => await StorageService.GetFileAsync((listedItem as IShortcutItem)?.TargetPath is { Length: > 0 } targetPath
+								? targetPath
+								: itemPath)
+						};
+						await StartMenuService.PinAsync(storable, listedItem.Name);
+					});
+				}
 			}
-			else
+			else if (context.ShellPage?.ShellViewModel?.CurrentFolder is not null)
 			{
-				await App.SecondaryTileHelper.TryPinFolderAsync(context.ShellPage?.FilesystemViewModel.CurrentFolder.ItemPath, context.ShellPage?.FilesystemViewModel.CurrentFolder.Name);
+				await SafetyExtensions.IgnoreExceptions(async () =>
+				{
+					var currentFolder = context.ShellPage.ShellViewModel.CurrentFolder;
+					var currentFolderPath = currentFolder.GetRequiredPath();
+					IStorable storable = context.PageType is ContentPageTypes.ZipFolder
+						? await StorageService.GetFileAsync(currentFolderPath)
+						: await StorageService.GetFolderAsync(currentFolderPath);
+
+					await StartMenuService.PinAsync(storable, currentFolder.Name);
+				});
 			}
 		}
 	}

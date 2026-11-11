@@ -1,11 +1,15 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.UI.Xaml.Data;
-using System;
 using Windows.Storage;
+using WinRT;
 
 namespace Files.App.Converters
 {
-	internal class StorageDeleteOptionToBooleanConverter : IValueConverter
+	internal sealed partial class StorageDeleteOptionToBooleanConverter : IValueConverter
 	{
+		[DynamicWindowsRuntimeCast(typeof(StorageDeleteOption))]
 		public object Convert(object value, Type targetType, object parameter, string language)
 		{
 			return value is StorageDeleteOption option && option == StorageDeleteOption.PermanentDelete;

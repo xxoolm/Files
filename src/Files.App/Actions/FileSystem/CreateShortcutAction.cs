@@ -1,56 +1,54 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Filesystem;
-using Files.App.Helpers;
-using System.ComponentModel;
-using System.IO;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class CreateShortcutAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class CreateShortcutAction : BaseUIAction, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "CreateShortcut".GetLocalizedResource();
+		public string Label
+			=> Strings.CreateShortcut.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string ExtendedLabel
+			=> Strings.CreateShortcutWithSelection.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new RichGlyph(opacityStyle: "ColorIconShortcut");
+		public string Description
+			=> Strings.CreateShortcutDescription.GetLocalizedFormatResource(context.SelectedItems.Count);
 
-		public bool IsExecutable => context.HasSelection;
+		public ActionCategory Category
+			=> ActionCategory.Create;
+
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.URL");
+
+		public override bool IsExecutable =>
+			context.HasSelection &&
+			context.CanCreateItem &&
+			UIHelpers.CanShowDialog;
 
 		public CreateShortcutAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public async Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
-			var currentPath = context.ShellPage?.FilesystemViewModel.WorkingDirectory;
-
-			if (App.LibraryManager.TryGetLibrary(currentPath ?? string.Empty, out var library) && !library.IsEmpty)
-			{
-				currentPath = library.DefaultSaveFolder;
-			}
-
-			foreach (ListedItem selectedItem in context.SelectedItems)
-			{
-				var fileName = string.Format("ShortcutCreateNewSuffix".GetLocalizedResource(), selectedItem.Name) + ".lnk";
-				var filePath = Path.Combine(currentPath ?? string.Empty, fileName);
-
-				if (!await FileOperationsHelpers.CreateOrUpdateLinkAsync(filePath, selectedItem.ItemPath))
-					await UIFilesystemHelpers.HandleShortcutCannotBeCreated(fileName, selectedItem.ItemPath);
-			}
+			return UIFilesystemHelpers.CreateShortcutAsync(context.ShellPage, context.SelectedItems);
 		}
 
 		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			if (e.PropertyName is nameof(IContentPageContext.HasSelection))
-				OnPropertyChanged(nameof(IsExecutable));
+			switch (e.PropertyName)
+			{
+				case nameof(IContentPageContext.HasSelection):
+				case nameof(IContentPageContext.CanCreateItem):
+					OnPropertyChanged(nameof(IsExecutable));
+					break;
+			}
 		}
 	}
 }

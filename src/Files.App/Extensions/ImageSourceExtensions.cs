@@ -1,8 +1,8 @@
-using System;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using System.IO;
 using System.Runtime.InteropServices.WindowsRuntime;
-using System.Threading;
-using System.Threading.Tasks;
 using Windows.Storage;
 using Windows.Storage.Streams;
 
@@ -10,19 +10,19 @@ namespace Files.App.Extensions
 {
 	internal static class ImageSourceExtensions
 	{
-		internal static async Task<byte[]> ToByteArrayAsync(this IInputStream stream)
+		internal static async Task<byte[]?> ToByteArrayAsync(this IInputStream? stream)
 		{
 			if (stream is null)
 			{
 				return null;
 			}
 
-			using var readStream = stream.AsStreamForRead();
+			await using var readStream = stream.AsStreamForRead();
 
 			return await readStream.ToByteArrayAsync();
 		}
 
-		internal static async Task<byte[]> ToByteArrayAsync(this StorageFile file)
+		internal static async Task<byte[]?> ToByteArrayAsync(this StorageFile? file)
 		{
 			if (file is null)
 			{

@@ -1,122 +1,182 @@
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.CommandLine;
-using Files.App.Filesystem;
-using Files.App.Helpers;
-using Files.App.UserControls.MultitaskingControl;
-using Files.App.ViewModels;
-using Files.App.Views;
-using Files.Backend.Services.Settings;
-using Files.Shared.Extensions;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Microsoft.Extensions.Logging;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
-using Microsoft.UI.Xaml.Navigation;
-using System;
 using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.Activation;
 using Windows.Storage;
-using WinUIEx;
+using Windows.Win32.Foundation;
+using WinRT;
 using IO = System.IO;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
 
 namespace Files.App
 {
-	/// <summary>
-	/// An empty window that can be used on its own or navigated to within a Frame.
-	/// </summary>
 	public sealed partial class MainWindow : WindowEx
 	{
-		public MainWindow()
+		private static MainWindow? _Instance;
+		public static MainWindow Instance => _Instance ??= new();
+
+		private bool CanWindowToFront { get; set; } = true;
+		private readonly Lock _canWindowToFrontLock = new();
+		private bool _isWindowIconInitialized;
+
+		protected override bool PersistPlacement => true;
+
+		public MainWindow() : base(416, 316)
 		{
 			InitializeComponent();
 
-			PersistenceId = "FilesMainWindow";
-
-			EnsureEarlyWindow();
-		}
-
-		private void EnsureEarlyWindow()
-		{
-			// Set title
-			AppWindow.Title = "Files";
-
-			// Set logo
-			AppWindow.SetIcon(Path.Combine(Package.Current.InstalledLocation.Path, App.LogoPath));
-
-			// Extend title bar
-			AppWindow.TitleBar.ExtendsContentIntoTitleBar = true;
-
-			// Set window buttons background to transparent
+			ExtendsContentIntoTitleBar = true;
+			Title = "Files";
 			AppWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent;
 			AppWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-
-			// Set min size
-			base.MinHeight = 328;
-			base.MinWidth = 516;
+			AppWindow.TitleBar.ButtonPressedBackgroundColor = Colors.Transparent;
+			AppWindow.TitleBar.ButtonHoverBackgroundColor = Colors.Transparent;
 		}
 
-		public async Task InitializeApplication(object activatedEventArgs)
+		private void InitializeWindowIcon()
+		{
+			if (_isWindowIconInitialized)
+				return;
+
+			AppWindow.SetIcon(AppLifecycleHelper.AppIconPath);
+			_isWindowIconInitialized = true;
+		}
+
+		internal async Task<bool> ActivateWithBackdropAsync()
 		{
 			var rootFrame = EnsureWindowIsInitialized();
-			Activate();
+			if (rootFrame is null)
+				return false;
 
-			// WINUI3: port activation args from App.xaml.cs.old: OnActivated, OnFileActivated
+			// Submit the initial content and backdrop before the window's normal show animation.
+			await CompositionTarget.GetCompositorForCurrentThread().RequestCommitAsync();
+
+			var firstFrame = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			CompositionTarget.Rendered += OnRendered;
+			Closed += OnClosed;
+			try
+			{
+				Activate();
+				// Let the initial content paint before starting the remaining initialization.
+				return await firstFrame.Task;
+			}
+			finally
+			{
+				CompositionTarget.Rendered -= OnRendered;
+				Closed -= OnClosed;
+			}
+
+			void OnRendered(object? sender, RenderedEventArgs args)
+			{
+				if (rootFrame.IsLoaded)
+					firstFrame.TrySetResult(true);
+			}
+
+			void OnClosed(object sender, WindowEventArgs args)
+				=> firstFrame.TrySetResult(false);
+		}
+
+		public void ShowSplashScreen()
+		{
+			var rootFrame = EnsureWindowIsInitialized();
+
+			rootFrame?.Navigate(typeof(SplashScreenPage));
+		}
+
+		internal void ShowMainPage()
+		{
+			EnsureWindowIsInitialized()?.Navigate(typeof(MainPage),
+				new MainPageNavigationArguments { DeferInitialization = true }, new SuppressNavigationTransitionInfo());
+		}
+
+		[DynamicWindowsRuntimeCast(typeof(OverlappedPresenter))]
+		public async Task InitializeApplicationAsync(object? activatedEventArgs)
+		{
+			var rootFrame = EnsureWindowIsInitialized();
+
+			if (rootFrame is null)
+				return;
+
 			switch (activatedEventArgs)
 			{
 				case ILaunchActivatedEventArgs launchArgs:
-					if (launchArgs.Arguments is not null && launchArgs.Arguments.Contains($"files.exe", StringComparison.OrdinalIgnoreCase))
+					if (launchArgs.Arguments is not null &&
+						(CommandLineParser.SplitArguments(launchArgs.Arguments, true)[0].EndsWith($"files-dev.exe", StringComparison.OrdinalIgnoreCase)
+						|| CommandLineParser.SplitArguments(launchArgs.Arguments, true)[0].EndsWith($"files-dev", StringComparison.OrdinalIgnoreCase)
+						|| CommandLineParser.SplitArguments(launchArgs.Arguments, true)[0].Equals(Path.Join(Package.Current.InstalledPath, "Files.exe"), StringComparison.OrdinalIgnoreCase)))
 					{
-						// WINUI3 bug: when launching from commandline the argument is not ICommandLineActivatedEventArgs (#10370)
+						// WINUI3: When launching from commandline the argument is not ICommandLineActivatedEventArgs (#10370)
 						var ppm = CommandLineParser.ParseUntrustedCommands(launchArgs.Arguments);
 						if (ppm.IsEmpty())
 							rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 						else
-							await InitializeFromCmdLineArgs(rootFrame, ppm);
+							await InitializeFromCmdLineArgsAsync(rootFrame, ppm, Program.ConsumeLaunchCwd());
 					}
-					else if (rootFrame.Content is null)
+					else if (rootFrame.Content is null || rootFrame.Content is SplashScreenPage || !MainPageViewModel.AppInstances.Any())
 					{
 						// When the navigation stack isn't restored navigate to the first page,
-						// configuring the new page by passing required information as a navigation
-						// parameter
+						// configuring the new page by passing required information as a navigation parameter
 						rootFrame.Navigate(typeof(MainPage), launchArgs.Arguments, new SuppressNavigationTransitionInfo());
+					}
+					else if (!(string.IsNullOrEmpty(launchArgs.Arguments) && MainPageViewModel.AppInstances.Count > 0))
+					{
+						// Bring to foreground (#14730)
+						Win32Helper.BringToForegroundEx(new(WindowHandle));
+
+						await NavigationHelpers.AddNewTabByPathAsync(typeof(ShellPanesPage), launchArgs.Arguments, true);
 					}
 					else
 					{
-						if (!(string.IsNullOrEmpty(launchArgs.Arguments) && MainPageViewModel.AppInstances.Count > 0))
-						{
-							await MainPageViewModel.AddNewTabByPathAsync(typeof(PaneHolderPage), launchArgs.Arguments);
-						}
+						rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 					}
 					break;
 
 				case IProtocolActivatedEventArgs eventArgs:
-					if (eventArgs.Uri.AbsoluteUri == "files-uwp:")
+					if (eventArgs.Uri.AbsoluteUri == "files-dev:")
 					{
 						rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
+
+						// Bring to foreground (#14730)
+						Win32Helper.BringToForegroundEx(new(WindowHandle));
+
+						// Ensure app-level keyboard shortcuts work immediately after Win+E activation.
+						_ = EnsureContentHasKeyboardFocusAsync();
 					}
 					else
 					{
 						var parsedArgs = eventArgs.Uri.Query.TrimStart('?').Split('=');
-						var unescapedValue = Uri.UnescapeDataString(parsedArgs[1]);
-						var folder = (StorageFolder)await FilesystemTasks.Wrap(() => StorageFolder.GetFolderFromPathAsync(unescapedValue).AsTask());
-						if (folder is not null && !string.IsNullOrEmpty(folder.Path))
+						var unescapedValue = Uri.UnescapeDataString(parsedArgs[1].Split('&')[0]);
+						if (parsedArgs[0] == "tab" && parsedArgs.Length > 3 &&
+							int.TryParse(parsedArgs[2].Split('&')[0], out var dx) &&
+							int.TryParse(parsedArgs[3], out var dy))
+							AppWindow?.Move(new(dx - 100, dy - 16));
+						var folderResult = await FilesystemTasks.Wrap(() => StorageFolder.GetFolderFromPathAsync(unescapedValue).AsTask());
+						if (folderResult.Result is { } folder && !string.IsNullOrEmpty(folder.Path))
 						{
-							unescapedValue = folder.Path; // Convert short name to long name (#6190)
+							// Convert short name to long name (#6190)
+							unescapedValue = folder.Path;
 						}
 						switch (parsedArgs[0])
 						{
 							case "tab":
-								rootFrame.Navigate(typeof(MainPage), TabItemArguments.Deserialize(unescapedValue), new SuppressNavigationTransitionInfo());
+								rootFrame.Navigate(typeof(MainPage),
+									new MainPageNavigationArguments() { Parameter = TabBarItemParameter.Deserialize(unescapedValue), IgnoreStartupSettings = true },
+									new SuppressNavigationTransitionInfo());
 								break;
 
 							case "folder":
-								rootFrame.Navigate(typeof(MainPage), unescapedValue, new SuppressNavigationTransitionInfo());
+								rootFrame.Navigate(typeof(MainPage),
+									new MainPageNavigationArguments() { Parameter = unescapedValue, IgnoreStartupSettings = true },
+									new SuppressNavigationTransitionInfo());
 								break;
 
 							case "cmd":
@@ -124,7 +184,10 @@ namespace Files.App
 								if (ppm.IsEmpty())
 									rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 								else
-									await InitializeFromCmdLineArgs(rootFrame, ppm);
+									await InitializeFromCmdLineArgsAsync(rootFrame, ppm, Environment.CurrentDirectory);
+								break;
+							default:
+								rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 								break;
 						}
 					}
@@ -138,97 +201,185 @@ namespace Files.App
 					var parsedCommands = CommandLineParser.ParseUntrustedCommands(cmdLineString);
 					if (parsedCommands is not null && parsedCommands.Count > 0)
 					{
-						await InitializeFromCmdLineArgs(rootFrame, parsedCommands, activationPath);
+						await InitializeFromCmdLineArgsAsync(rootFrame, parsedCommands, activationPath);
 					}
-					break;
-
-				case IToastNotificationActivatedEventArgs eventArgsForNotification:
-					if (eventArgsForNotification.Argument == "report")
+					else
 					{
-						await Windows.System.Launcher.LaunchUriAsync(new Uri(Constants.GitHub.BugReportUrl));
+						rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 					}
-					break;
-
-				case IStartupTaskActivatedEventArgs:
 					break;
 
 				case IFileActivatedEventArgs fileArgs:
-					var index = 0;
-					if (rootFrame.Content is null)
+					try
 					{
-						// When the navigation stack isn't restored navigate to the first page,
-						// configuring the new page by passing required information as a navigation
-						// parameter
-						rootFrame.Navigate(typeof(MainPage), fileArgs.Files.First().Path, new SuppressNavigationTransitionInfo());
-						index = 1;
+						if (fileArgs.Files is null || fileArgs.Files.Count == 0)
+						{
+							break;
+						}
+
+						var index = 0;
+						if (rootFrame.Content is null || rootFrame.Content is SplashScreenPage || !MainPageViewModel.AppInstances.Any())
+						{
+							// When the navigation stack isn't restored navigate to the first page,
+							// configuring the new page by passing required information as a navigation parameter
+							rootFrame.Navigate(typeof(MainPage), fileArgs.Files.First().Path, new SuppressNavigationTransitionInfo());
+							index = 1;
+						}
+						else
+						{
+							// Bring to foreground (#14730)
+							Win32Helper.BringToForegroundEx(new(WindowHandle));
+						}
+
+						for (; index < fileArgs.Files.Count; index++)
+						{
+							await NavigationHelpers.AddNewTabByPathAsync(typeof(ShellPanesPage), fileArgs.Files[index].Path, true);
+						}
 					}
-					for (; index < fileArgs.Files.Count; index++)
+					catch (Exception ex)
 					{
-						await MainPageViewModel.AddNewTabByPathAsync(typeof(PaneHolderPage), fileArgs.Files[index].Path);
+						App.Logger.LogWarning(ex, "Failed to open files.");
+						if (rootFrame.Content is null || rootFrame.Content is SplashScreenPage || !MainPageViewModel.AppInstances.Any())
+							rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
+						else
+							Win32Helper.BringToForegroundEx(new(WindowHandle));
 					}
+					break;
+
+				case IStartupTaskActivatedEventArgs startupArgs:
+					// Just launch the app with no arguments
+					rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
+					break;
+
+				default:
+					// Just launch the app with no arguments
+					rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
 					break;
 			}
 
-			if (rootFrame.Content is null)
+			var appWindow = AppWindow;
+			if (appWindow is not null && !appWindow.IsVisible)
 			{
-				rootFrame.Navigate(typeof(MainPage), null, new SuppressNavigationTransitionInfo());
+				appWindow.Show();
+				Activate();
+
+				// Bring to foreground (#14730) in case Activate() doesn't
+				Win32Helper.BringToForegroundEx(new(WindowHandle));
+			}
+
+			if (Windows.Win32.PInvoke.IsIconic(new(WindowHandle)) && appWindow?.Presenter is OverlappedPresenter overlapped)
+				overlapped.Restore();
+		}
+
+		private async Task EnsureContentHasKeyboardFocusAsync()
+		{
+			await Task.Delay(100);
+			var shellPage = Ioc.Default.GetService<IContentPageContext>()?.ShellPage;
+			if (shellPage is not null)
+			{
+				var paneHolder = shellPage.GetRequiredPaneHolder();
+				paneHolder.FocusActivePane();
 			}
 		}
 
-		private Frame EnsureWindowIsInitialized()
+		[DynamicWindowsRuntimeCast(typeof(Frame))]
+		private Frame? EnsureWindowIsInitialized()
 		{
-			// Do not repeat app initialization when the Window already has content,
-			// just ensure that the window is active
-			if (!(App.Window.Content is Frame rootFrame))
+			try
 			{
-				// Create a Frame to act as the navigation context and navigate to the first page
-				rootFrame = new Frame();
-				rootFrame.CacheSize = 1;
-				rootFrame.NavigationFailed += OnNavigationFailed;
+				// NOTE:
+				//  Do not repeat app initialization when the Window already has content,
+				//  just ensure that the window is active
+				if (Instance.Content is not Frame rootFrame)
+				{
+					// Create a Frame to act as the navigation context and navigate to the first page
+					rootFrame = new() { CacheSize = 1 };
+					rootFrame.Loaded += (_, _) =>
+					{
+						if (!_isWindowIconInitialized)
+							rootFrame.RunAfterNextRender(InitializeWindowIcon);
+					};
+					rootFrame.NavigationFailed += (s, e) =>
+					{
+						throw new Exception("Failed to load Page " + e.SourcePageType.FullName);
+					};
 
-				// Place the frame in the current Window
-				App.Window.Content = rootFrame;
+					// Place the frame in the current Window
+					Instance.Content = rootFrame;
+					Ioc.Default.GetRequiredService<IAppThemeModeService>().SetAppThemeMode(this, callThemeModeChangedEvent: false);
+					Ioc.Default.GetRequiredService<IResourcesService>().LoadAppResources(Ioc.Default.GetRequiredService<IAppearanceSettingsService>());
+				}
+
+				if (SystemBackdrop is null)
+				{
+					// Initialize the active material directly instead of transitioning from its inactive fallback.
+					var backdrop = new AppSystemBackdrop();
+					backdrop.SetInputActive(true);
+					SystemBackdrop = backdrop;
+				}
+
+				return rootFrame;
 			}
-
-			return rootFrame;
+			catch (COMException)
+			{
+				return null;
+			}
 		}
 
-		/// <summary>
-		/// Invoked when Navigation to a certain page fails
-		/// </summary>
-		/// <param name="sender">The Frame which failed navigation</param>
-		/// <param name="e">Details about the navigation failure</param>
-		private void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
+		private async Task InitializeFromCmdLineArgsAsync(Frame rootFrame, ParsedCommands parsedCommands, string activationPath = "")
 		{
-			throw new Exception("Failed to load Page " + e.SourcePageType.FullName);
-		}
-
-		private async Task InitializeFromCmdLineArgs(Frame rootFrame, ParsedCommands parsedCommands, string activationPath = "")
-		{
-			async Task PerformNavigation(string payload, string selectItem = null)
+			async Task PerformNavigationAsync(string? payload, string? selectItem = null)
 			{
 				if (!string.IsNullOrEmpty(payload))
 				{
-					payload = CommonPaths.ShellPlaces.Get(payload.ToUpperInvariant(), payload);
-					var folder = (StorageFolder)await FilesystemTasks.Wrap(() => StorageFolder.GetFolderFromPathAsync(payload).AsTask());
-					if (folder is not null && !string.IsNullOrEmpty(folder.Path))
-					{
+					payload = ShellHelpers.ResolveShellPath(payload);
+					var folderResult = await FilesystemTasks.Wrap(() => StorageFolder.GetFolderFromPathAsync(payload).AsTask());
+					if (folderResult.Result is { } folder && !string.IsNullOrEmpty(folder.Path))
 						payload = folder.Path; // Convert short name to long name (#6190)
-					}
 				}
+
+				var generalSettingsService = Ioc.Default.GetService<IGeneralSettingsService>();
+
+				double boundsWidth = 0;
+				try
+				{
+					boundsWidth = Bounds.Width;
+				}
+				catch (Exception ex)
+				{
+					// Handle exception in case WinUI Windows is closed
+					// (see https://github.com/files-community/Files/issues/15599)
+
+					App.Logger.LogWarning(ex, ex.Message);
+					return;
+				}
+
 				var paneNavigationArgs = new PaneNavigationArguments
 				{
 					LeftPaneNavPathParam = payload,
 					LeftPaneSelectItemParam = selectItem,
+					RightPaneNavPathParam = boundsWidth > Constants.UI.MultiplePaneWidthThreshold && (generalSettingsService?.AlwaysOpenDualPaneInNewTab ?? false) ? "Home" : null,
 				};
-				if (rootFrame.Content is not null)
+
+				if (rootFrame.Content is MainPage && MainPageViewModel.AppInstances.Any())
 				{
-					await MainPageViewModel.AddNewTabByParam(typeof(PaneHolderPage), paneNavigationArgs);
+					// Bring to foreground (#14730)
+					Win32Helper.BringToForegroundEx(new(WindowHandle));
+
+					var existingTabIndex = MainPageViewModel.AppInstances
+						.Select((tabItem, idx) => new { tabItem, idx })
+						.FirstOrDefault(x =>
+							x.tabItem.NavigationParameter!.NavigationParameter is PaneNavigationArguments paneArgs &&
+							(paneNavigationArgs.LeftPaneNavPathParam == paneArgs.LeftPaneNavPathParam ||
+							paneNavigationArgs.LeftPaneNavPathParam == paneArgs.RightPaneNavPathParam))?.idx ?? -1;
+
+					if (existingTabIndex >= 0)
+						App.AppModel.TabStripSelectedIndex = existingTabIndex;
+					else
+						await NavigationHelpers.AddNewTabByParamAsync(typeof(ShellPanesPage), paneNavigationArgs);
 				}
 				else
-				{
 					rootFrame.Navigate(typeof(MainPage), paneNavigationArgs, new SuppressNavigationTransitionInfo());
-				}
 			}
 			foreach (var command in parsedCommands)
 			{
@@ -238,18 +389,16 @@ namespace Files.App
 					case ParsedCommandType.OpenPath:
 					case ParsedCommandType.ExplorerShellCommand:
 						var selectItemCommand = parsedCommands.FirstOrDefault(x => x.Type == ParsedCommandType.SelectItem);
-						await PerformNavigation(command.Payload, selectItemCommand?.Payload);
+						await PerformNavigationAsync(command.Payload, selectItemCommand?.Payload);
 						break;
 
 					case ParsedCommandType.SelectItem:
 						if (IO.Path.IsPathRooted(command.Payload))
-						{
-							await PerformNavigation(IO.Path.GetDirectoryName(command.Payload), IO.Path.GetFileName(command.Payload));
-						}
+							await PerformNavigationAsync(IO.Path.GetDirectoryName(command.Payload), IO.Path.GetFileName(command.Payload));
 						break;
 
 					case ParsedCommandType.TagFiles:
-						var tagService = Ioc.Default.GetService<IFileTagsSettingsService>();
+						var tagService = Ioc.Default.GetRequiredService<IFileTagsSettingsService>();
 						var tag = tagService.GetTagsByName(command.Payload).FirstOrDefault();
 						foreach (var file in command.Args.Skip(1))
 						{
@@ -257,10 +406,10 @@ namespace Files.App
 								.OnSuccess(item => FileTagsHelper.GetFileFRN(item));
 							if (fileFRN is not null)
 							{
-								var tagUid = tag is not null ? new[] { tag.Uid } : null;
+								var tagUid = tag is not null ? new[] { tag.Uid } : [];
 								var dbInstance = FileTagsHelper.GetDbInstance();
 								dbInstance.SetTags(file, fileFRN, tagUid);
-								FileTagsHelper.WriteFileTag(file, tagUid);
+								await FileTagsHelper.WriteFileTagAsync(file, tagUid);
 							}
 						}
 						break;
@@ -268,18 +417,18 @@ namespace Files.App
 					case ParsedCommandType.Unknown:
 						if (command.Payload.Equals("."))
 						{
-							await PerformNavigation(activationPath);
+							await PerformNavigationAsync(activationPath);
 						}
 						else
 						{
 							if (!string.IsNullOrEmpty(command.Payload))
 							{
 								var target = IO.Path.GetFullPath(IO.Path.Combine(activationPath, command.Payload));
-								await PerformNavigation(target);
+								await PerformNavigationAsync(target);
 							}
 							else
 							{
-								await PerformNavigation(null);
+								await PerformNavigationAsync(null);
 							}
 						}
 						break;
@@ -289,6 +438,35 @@ namespace Files.App
 						break;
 				}
 			}
+		}
+
+		public bool SetCanWindowToFront(bool canWindowToFront)
+		{
+			lock (_canWindowToFrontLock)
+			{
+				if (CanWindowToFront != canWindowToFront)
+				{
+					CanWindowToFront = canWindowToFront;
+					return true;
+				}
+				return false;
+			}
+		}
+
+		protected override bool OnWindowMessageReceived(uint message, WPARAM wParam, LPARAM lParam, ref LRESULT result)
+		{
+			if ((!CanWindowToFront) && message == Windows.Win32.PInvoke.WM_WINDOWPOSCHANGING)
+			{
+				Win32Helper.ForceWindowPosition(lParam.Value);
+				return true;
+			}
+			else if (message == Windows.Win32.PInvoke.WM_MENUCHAR && (wParam.Value & 0xFFFF) == '\r')
+			{
+				result = new(Win32PInvoke.MNC_CLOSE << 16);
+				return true;
+			}
+
+			return false;
 		}
 	}
 }

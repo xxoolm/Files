@@ -1,36 +1,31 @@
-using Files.App.ViewModels.Dialogs;
-using Files.Shared.Enums;
-using Microsoft.UI.Xaml.Controls;
-using System;
-using System.Threading.Tasks;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
 
-// The Content Dialog item template is documented at https://go.microsoft.com/fwlink/?LinkId=234238
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using WinRT;
 
 namespace Files.App.Dialogs
 {
 	public sealed partial class DynamicDialog : ContentDialog, IDisposable
 	{
-		public DynamicDialogViewModel ViewModel
+		private FrameworkElement RootAppElement
 		{
-			get => (DynamicDialogViewModel)DataContext;
-			private set => DataContext = value;
+			[DynamicWindowsRuntimeCast(typeof(FrameworkElement))]
+			get => (FrameworkElement)MainWindow.Instance.Content;
 		}
+
+		public DynamicDialogViewModel ViewModel
+			=> DataContext as DynamicDialogViewModel ?? throw new ObjectDisposedException(nameof(DynamicDialog));
 
 		public DynamicDialogResult DynamicResult
 		{
 			get => ViewModel.DynamicResult;
 		}
 
-		public new Task<ContentDialogResult> ShowAsync() => SetContentDialogRoot(this).ShowAsync().AsTask();
-
-		// WINUI3
-		private ContentDialog SetContentDialogRoot(ContentDialog contentDialog)
+		public new Task<ContentDialogResult> ShowAsync()
 		{
-			if (Windows.Foundation.Metadata.ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
-			{
-				contentDialog.XamlRoot = App.Window.Content.XamlRoot;
-			}
-			return contentDialog;
+			return this.TryShowAsync();
 		}
 
 		public DynamicDialog(DynamicDialogViewModel dynamicDialogViewModel)
@@ -38,37 +33,45 @@ namespace Files.App.Dialogs
 			InitializeComponent();
 
 			dynamicDialogViewModel.HideDialog = Hide;
-			ViewModel = dynamicDialogViewModel;
+			DataContext = dynamicDialogViewModel;
 		}
-
-		#region IDisposable
-
-		public void Dispose()
-		{
-			ViewModel?.Dispose();
-			ViewModel = null;
-		}
-
-		#endregion IDisposable
 
 		private void ContentDialog_PrimaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
 		{
-			ViewModel.PrimaryButtonCommand.Execute(args);
+			(ViewModel.PrimaryButtonCommand
+				?? throw new InvalidOperationException("The primary button command has not been initialized.")).Execute(args);
 		}
 
 		private void ContentDialog_SecondaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
 		{
-			ViewModel.SecondaryButtonCommand.Execute(args);
+			(ViewModel.SecondaryButtonCommand
+				?? throw new InvalidOperationException("The secondary button command has not been initialized.")).Execute(args);
 		}
 
 		private void ContentDialog_CloseButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
 		{
-			ViewModel.CloseButtonCommand.Execute(args);
+			(ViewModel.CloseButtonCommand
+				?? throw new InvalidOperationException("The close button command has not been initialized.")).Execute(args);
 		}
 
 		private void ContentDialog_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
 		{
-			ViewModel.KeyDownCommand.Execute(e);
+			(ViewModel.KeyDownCommand
+				?? throw new InvalidOperationException("The key-down command has not been initialized.")).Execute(e);
+		}
+
+		// The dialog moves focus to its default button after Opened is raised, so handlers
+		// that focus the display content must be dispatched to run after that
+		private void ContentDialog_Opened(ContentDialog sender, ContentDialogOpenedEventArgs args)
+		{
+			DispatcherQueue.TryEnqueue(() =>
+				(DataContext as DynamicDialogViewModel)?.DisplayControlOnLoadedCommand?.Execute(null));
+		}
+
+		public void Dispose()
+		{
+			(DataContext as DynamicDialogViewModel)?.Dispose();
+			DataContext = null;
 		}
 	}
 }

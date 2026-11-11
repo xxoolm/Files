@@ -1,15 +1,17 @@
-using ByteSizeLib;
-using Files.Shared.Extensions;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.Windows.ApplicationModel.Resources;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.IO;
+using ByteSize = ByteSizeLib.ByteSize;
 
 namespace Files.App.Extensions
 {
 	public static class StringExtensions
 	{
+		private static IFoldersSettingsService FoldersSettingsService { get; } = Ioc.Default.GetRequiredService<IFoldersSettingsService>();
+
 		/// <summary>
 		/// Returns true if <paramref name="path"/> starts with the path <paramref name="baseDirPath"/>.
 		/// The comparison is case-insensitive, handles / and \ slashes as folder separators and
@@ -53,38 +55,46 @@ namespace Files.App.Extensions
 			return result;
 		}
 
-		private static readonly ResourceMap resourcesTree = new ResourceManager().MainResourceMap.TryGetSubtree("Resources");
+		private static readonly ResourceManager resourceManager = new();
+		private static readonly ResourceMap resourcesTree = resourceManager.MainResourceMap.TryGetSubtree("Resources");
+		private static readonly Lock resourceLookupLock = new();
+		private static ResourceContext? resourceContext;
 
 		private static readonly ConcurrentDictionary<string, string> cachedResources = new();
 
 		private static readonly Dictionary<string, string> abbreviations = new()
 		{
-			{ "KiB", "KiloByteSymbol".GetLocalizedResource() },
-			{ "MiB", "MegaByteSymbol".GetLocalizedResource() },
-			{ "GiB", "GigaByteSymbol".GetLocalizedResource() },
-			{ "TiB", "TeraByteSymbol".GetLocalizedResource() },
-			{ "PiB", "PetaByteSymbol".GetLocalizedResource() },
-			{ "B", "ByteSymbol".GetLocalizedResource() },
-			{ "b", "ByteSymbol".GetLocalizedResource() }
+			{ ByteSize.KiloByteSymbol, Strings.KiloByteSymbol },
+			{ ByteSize.MegaByteSymbol, Strings.MegaByteSymbol },
+			{ ByteSize.GigaByteSymbol, Strings.GigaByteSymbol },
+			{ ByteSize.TeraByteSymbol, Strings.TeraByteSymbol },
+			{ ByteSize.PetaByteSymbol, Strings.PetaByteSymbol },
+			{ ByteSize.BitSymbol, Strings.ByteSymbol },
+			{ ByteSize.ByteSymbol, Strings.ByteSymbol }
 		};
 
 		public static string ConvertSizeAbbreviation(this string value)
 		{
 			foreach (var item in abbreviations)
 			{
-				value = value.Replace(item.Key, item.Value, StringComparison.Ordinal);
+				value = value.Replace(item.Key, item.Value.GetLocalizedResource(), StringComparison.Ordinal);
 			}
 
 			return value;
 		}
 
+		public static string ToSizeString(this double size) => ByteSize.FromBytes(size).ToSizeString();
 		public static string ToSizeString(this long size) => ByteSize.FromBytes(size).ToSizeString();
 		public static string ToSizeString(this ulong size) => ByteSize.FromBytes(size).ToSizeString();
-		public static string ToSizeString(this ByteSize size) => size.ToBinaryString().ConvertSizeAbbreviation();
+		public static string ToSizeString(this decimal size) => ByteSize.FromBytes((double)size).ToSizeString();
+		public static string ToSizeString(this ByteSize size) => FoldersSettingsService.SizeUnitFormat is SizeUnitTypes.BinaryUnits
+			? size.ToBinaryString().ConvertSizeAbbreviation()
+			: size.ToString().ConvertSizeAbbreviation();
+
 
 		public static string ToLongSizeString(this long size) => ByteSize.FromBytes(size).ToLongSizeString();
 		public static string ToLongSizeString(this ulong size) => ByteSize.FromBytes(size).ToLongSizeString();
-		public static string ToLongSizeString(this ByteSize size) => $"{size.ToSizeString()} ({size.Bytes:#,##0} {"ItemSizeBytes".GetLocalizedResource()})";
+		public static string ToLongSizeString(this ByteSize size) => $"{size.ToSizeString()} ({size.Bytes:#,##0} {Strings.ItemSizeBytes.GetLocalizedResource()})";
 
 		//public static string GetLocalizedResource(this string s) => s.GetLocalized("Resources");
 
@@ -95,9 +105,24 @@ namespace Files.App.Extensions
 				return value;
 			}
 
-			value = resourcesTree?.TryGetValue(resourceKey)?.ValueAsString;
+			lock (resourceLookupLock)
+			{
+				if (cachedResources.TryGetValue(resourceKey, out value))
+					return value;
 
-			return cachedResources[resourceKey] = value ?? string.Empty;
+				resourceContext ??= resourceManager.CreateResourceContext();
+				value = resourcesTree?.TryGetValue(resourceKey, resourceContext)?.ValueAsString;
+				return cachedResources[resourceKey] = value ?? string.Empty;
+			}
+		}
+
+		internal static void ResetLocalizedResources()
+		{
+			lock (resourceLookupLock)
+			{
+				resourceContext = null;
+				cachedResources.Clear();
+			}
 		}
 	}
 }

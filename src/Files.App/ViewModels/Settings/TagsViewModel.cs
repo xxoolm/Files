@@ -1,18 +1,12 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using CommunityToolkit.Mvvm.Input;
-using Files.App.Helpers;
-using Files.Backend.Services.Settings;
-using Files.Backend.ViewModels.FileTags;
-using Files.Shared.Extensions;
-using System.Collections.ObjectModel;
-using System.Linq;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using System.Windows.Input;
 
 namespace Files.App.ViewModels.Settings
 {
-	public class TagsViewModel : ObservableObject
-    {
+	public sealed partial class TagsViewModel : ObservableObject
+	{
 		private readonly IFileTagsSettingsService fileTagsSettingsService = Ioc.Default.GetRequiredService<IFileTagsSettingsService>();
 
 		private bool isBulkOperation = true;
@@ -41,11 +35,42 @@ namespace Files.App.ViewModels.Settings
 			SaveNewTagCommand = new RelayCommand(DoSaveNewTag);
 			CancelNewTagCommand = new RelayCommand(DoCancelNewTag);
 
-			Tags = new ObservableCollection<ListedTagViewModel>();
+			Tags = [];
 			Tags.CollectionChanged += Tags_CollectionChanged;
-			fileTagsSettingsService.FileTagList?.ForEach(tag => Tags.Add(new ListedTagViewModel(tag)));
+			UpdateTags(fileTagsSettingsService.FileTagList);
+		}
 
-			isBulkOperation = false;
+		internal void UpdateTags(IList<TagViewModel> tags)
+		{
+			isBulkOperation = true;
+			try
+			{
+				for (int index = 0; index < tags.Count; index++)
+				{
+					var tag = tags[index];
+					var item = Tags.FirstOrDefault(item => item.Tag.Uid == tag.Uid);
+					if (item is null)
+					{
+						Tags.Insert(index, new ListedTagViewModel(tag));
+						continue;
+					}
+
+					var oldIndex = Tags.IndexOf(item);
+					if (oldIndex != index)
+						Tags.Move(oldIndex, index);
+					item.Tag = tag;
+					if (!item.IsEditing)
+						item.NewColor = tag.Color;
+				}
+
+				while (Tags.Count > tags.Count)
+					Tags.RemoveAt(Tags.Count - 1);
+			}
+			finally
+			{
+				isDragStarting = true;
+				isBulkOperation = false;
+			}
 		}
 
 		private void Tags_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
@@ -76,11 +101,6 @@ namespace Files.App.ViewModels.Settings
 			IsCreatingNewTag = false;
 
 			fileTagsSettingsService.CreateNewTag(NewTag.Name, NewTag.Color);
-
-			isBulkOperation = true;
-			Tags.Clear();
-			fileTagsSettingsService.FileTagList?.ForEach(tag => Tags.Add(new ListedTagViewModel(tag)));
-			isBulkOperation = false;
 		}
 
 		private void DoCancelNewTag()
@@ -91,24 +111,15 @@ namespace Files.App.ViewModels.Settings
 		public void EditExistingTag(ListedTagViewModel item, string newName, string color)
 		{
 			fileTagsSettingsService.EditTag(item.Tag.Uid, newName, color);
-
-			isBulkOperation = true;
-			Tags.Clear();
-			fileTagsSettingsService.FileTagList?.ForEach(tag => Tags.Add(new ListedTagViewModel(tag)));
-			isBulkOperation = false;
 		}
 
 		public void DeleteExistingTag(ListedTagViewModel item)
 		{
-			isBulkOperation = true;
-			Tags.Remove(item);
-			isBulkOperation = false;
-
 			fileTagsSettingsService.DeleteTag(item.Tag.Uid);
 		}
 	}
 
-	public class NewTagViewModel : ObservableObject
+	public sealed partial class NewTagViewModel : ObservableObject
 	{
 		private string name = string.Empty;
 		public string Name
@@ -116,8 +127,11 @@ namespace Files.App.ViewModels.Settings
 			get => name;
 			set
 			{
-				if (SetProperty(ref name, value))
+				SetProperty(ref name, value);
+				{
+					OnPropertyChanged(nameof(CanCommit));
 					OnPropertyChanged(nameof(IsNameValid));
+				}
 			}
 		}
 
@@ -128,17 +142,23 @@ namespace Files.App.ViewModels.Settings
 			set => SetProperty(ref color, value);
 		}
 
-		private bool isNameValid;
+		private bool isNameValid = true;
 		public bool IsNameValid
 		{
 			get => isNameValid;
-			set => SetProperty(ref isNameValid, value);
+			set
+			{
+				if (SetProperty(ref isNameValid, value))
+					OnPropertyChanged(nameof(CanCommit));
+			}
 		}
+
+		public bool CanCommit => !string.IsNullOrEmpty(name) && IsNameValid;
 
 		public void Reset()
 		{
 			Name = string.Empty;
-			IsNameValid = false;
+			IsNameValid = true;
 			Color = ColorHelpers.RandomColor();
 		}
 	}

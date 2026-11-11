@@ -1,42 +1,46 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Files.App.Dialogs;
-using Files.App.Helpers;
 using Files.App.ViewModels.Properties;
-using Files.Shared.Enums;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using System.Diagnostics;
-using System.Threading.Tasks;
 
 namespace Files.App.Views.Properties
 {
 	public sealed partial class DetailsPage : BasePropertiesPage
 	{
+		private readonly DispatcherQueueTimer _updateDateDisplayTimer;
+
 		public DetailsPage()
 		{
 			InitializeComponent();
+
+			_updateDateDisplayTimer = DispatcherQueue.CreateTimer();
+			_updateDateDisplayTimer.Interval = TimeSpan.FromSeconds(1);
+			_updateDateDisplayTimer.Tick += UpdateDateDisplayTimer_Tick;
+			_updateDateDisplayTimer.Start();
 		}
 
-		protected override void Properties_Loaded(object sender, RoutedEventArgs e)
-		{
-			base.Properties_Loaded(sender, e);
+		protected override Task LoadPropertiesAsync()
+			=> Task.WhenAll(base.LoadPropertiesAsync(), LoadDetailsAsync());
 
-			if (BaseProperties is FileProperties fileProps)
-			{
-				Stopwatch stopwatch = Stopwatch.StartNew();
-				fileProps.GetSystemFileProperties();
-				stopwatch.Stop();
-				Debug.WriteLine(string.Format("System file properties were obtained in {0} milliseconds", stopwatch.ElapsedMilliseconds));
-			}
-		}
-
-		// WINUI3
-		private static ContentDialog SetContentDialogRoot(ContentDialog contentDialog)
+		private async Task LoadDetailsAsync()
 		{
-			if (Windows.Foundation.Metadata.ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
+			if (BaseProperties is IFileProperties fileProps)
 			{
-				contentDialog.XamlRoot = App.Window.Content.XamlRoot;
+				try
+				{
+					Stopwatch stopwatch = Stopwatch.StartNew();
+					await fileProps.GetSystemFilePropertiesAsync();
+					stopwatch.Stop();
+					Debug.WriteLine($"System file properties were obtained in {stopwatch.ElapsedMilliseconds} milliseconds");
+				}
+				finally
+				{
+					ViewModel.IsPropertiesLoaded = true;
+				}
 			}
-			return contentDialog;
 		}
 
 		public override async Task<bool> SaveChangesAsync()
@@ -46,7 +50,7 @@ namespace Files.App.Views.Properties
 				using DynamicDialog dialog = DynamicDialogFactory.GetFor_PropertySaveErrorDialog();
 				try
 				{
-					if (BaseProperties is FileProperties fileProps)
+					if (BaseProperties is IFileProperties fileProps)
 					{
 						await fileProps.SyncPropertyChangesAsync();
 					}
@@ -54,7 +58,7 @@ namespace Files.App.Views.Properties
 				}
 				catch
 				{
-					await SetContentDialogRoot(dialog).TryShowAsync();
+					await dialog.TryShowAsync();
 					switch (dialog.DynamicResult)
 					{
 						case DynamicDialogResult.Primary:
@@ -73,14 +77,27 @@ namespace Files.App.Views.Properties
 		private async void ClearPropertiesConfirmation_Click(object sender, RoutedEventArgs e)
 		{
 			ClearPropertiesFlyout.Hide();
-			if (BaseProperties is FileProperties fileProps)
+			if (BaseProperties is IFileProperties fileProps)
 			{
 				await fileProps.ClearPropertiesAsync();
 			}
 		}
 
+		private void UpdateDateDisplayTimer_Tick(object sender, object e)
+		{
+			if (App.AppModel.PropertiesWindowCount == 0)
+				return;
+
+			ViewModel.PropertySections.ForEach(section => section.ForEach(property =>
+			{
+				if (property.Value is DateTimeOffset)
+					property.UpdateValueText();
+			}));
+		}
+
 		public override void Dispose()
 		{
+			_updateDateDisplayTimer.Stop();
 		}
 	}
 }

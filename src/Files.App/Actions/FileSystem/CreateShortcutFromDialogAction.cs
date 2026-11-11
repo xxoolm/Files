@@ -1,27 +1,54 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class CreateShortcutFromDialogAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class CreateShortcutFromDialogAction : BaseUIAction, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Shortcut".GetLocalizedResource();
+		public string Label
+			=> Strings.Shortcut.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string ExtendedLabel
+			=> Strings.CreateShortcut.GetLocalizedResource();
 
-		public RichGlyph Glyph { get; } = new RichGlyph(opacityStyle: "ColorIconShortcut");
+		public string Description
+			=> Strings.CreateShortcutFromDialogDescription.GetLocalizedResource();
 
-		public async Task ExecuteAsync()
+		public ActionCategory Category
+			=> ActionCategory.Create;
+
+		public string AccessKey
+			=> "S";
+
+		public string AutomationId
+			=> "InnerNavigationToolbarNewShortcutButton";
+
+		public RichGlyph Glyph
+			=> new("\uE71B");
+
+		public override bool IsExecutable =>
+			context.CanCreateItem &&
+			UIHelpers.CanShowDialog;
+
+		public CreateShortcutFromDialogAction()
 		{
-			if (context.ShellPage is not null)
-				await UIFilesystemHelpers.CreateShortcutFromDialogAsync(context.ShellPage);
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
+			context.PropertyChanged += Context_PropertyChanged;
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
+		{
+			return UIFilesystemHelpers.CreateShortcutFromDialogAsync(context.ShellPage!);
+		}
+
+		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+		{
+			if (e.PropertyName is nameof(IContentPageContext.CanCreateItem))
+				OnPropertyChanged(nameof(IsExecutable));
 		}
 	}
 }

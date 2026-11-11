@@ -1,33 +1,50 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
-using System.Threading.Tasks;
-using Windows.System;
+using System.Runtime.InteropServices;
+using WinRT;
 
 namespace Files.App.Actions
 {
-	internal class ToggleSelectAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class ToggleSelectAction : IAction
 	{
-		public string Label { get; } = "ToggleSelect".GetLocalizedResource();
-		public string Description => "TODO: Need to be described.";
+		public string Label
+			=> Strings.ToggleSelect.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.Space, VirtualKeyModifiers.Control);
+		public string Description
+			=> Strings.ToggleSelectDescription.GetLocalizedResource();
 
-		public bool IsExecutable => GetFocusedElement() is not null;
+		public ActionCategory Category
+			=> ActionCategory.Selection;
 
-		public Task ExecuteAsync()
+		public HotKey HotKey
+			=> new(Keys.Space, KeyModifiers.Ctrl);
+
+		public bool IsExecutable
+			=> GetFocusedElement() is not null;
+
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			if (GetFocusedElement() is SelectorItem item)
-			{
 				item.IsSelected = !item.IsSelected;
-			}
+
 			return Task.CompletedTask;
 		}
 
+		[DynamicWindowsRuntimeCast(typeof(SelectorItem))]
 		private static SelectorItem? GetFocusedElement()
 		{
-			return FocusManager.GetFocusedElement(App.Window.Content.XamlRoot) as SelectorItem;
+			try
+			{
+				return FocusManager.GetFocusedElement(MainWindow.Instance.Content.XamlRoot) as SelectorItem;
+			}
+			catch (COMException) // Window may already be closed
+			{
+				return null;
+			}
 		}
 	}
 }

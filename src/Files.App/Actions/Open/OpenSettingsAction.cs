@@ -1,30 +1,41 @@
-﻿using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Extensions;
-using Files.Backend.Extensions;
-using Files.Backend.Services;
-using Files.Backend.ViewModels.Dialogs;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class OpenSettingsAction : IAction
+	[GeneratedRichCommand]
+	internal sealed partial class OpenSettingsAction : BaseUIAction, IAction
 	{
-		private readonly IDialogService dialogService = Ioc.Default.GetRequiredService<IDialogService>();
+		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
 
-		private readonly SettingsDialogViewModel viewModel = new();
+		public string Label
+			=> Strings.Settings.GetLocalizedResource();
 
-		public string Label => "Settings".GetLocalizedResource();
+		public string Description
+			=> Strings.OpenSettingsDescription.GetLocalizedResource();
 
-		public string Description => "Settings".GetLocalizedResource();
+		public ActionCategory Category
+			=> ActionCategory.Open;
 
-		public HotKey HotKey { get; } = new((VirtualKey)188, VirtualKeyModifiers.Control);
+		public HotKey HotKey
+			=> new(Keys.OemComma, KeyModifiers.Ctrl);
 
-		public async Task ExecuteAsync()
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.Settings");
+
+		public Task ExecuteAsync(object? parameter = null)
 		{
-			var dialog = dialogService.GetDialog(viewModel);
-			await dialog.TryShowAsync();
+			var settingsPage = (parameter as SettingsNavigationParams)?.PageKind.ToString();
+
+			return settingsPage is not null
+				? NavigationHelpers.AddNewTabByParamAsync(
+					typeof(ShellPanesPage),
+					new PaneNavigationArguments()
+					{
+						LeftPaneNavPathParam = "Settings",
+						LeftPaneSelectItemParam = settingsPage,
+					})
+				: NavigationHelpers.OpenPathInNewTab("Settings", true);
 		}
 	}
 }

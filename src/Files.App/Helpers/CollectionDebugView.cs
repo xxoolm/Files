@@ -1,6 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Helpers
 {

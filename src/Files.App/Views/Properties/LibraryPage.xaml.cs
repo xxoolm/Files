@@ -1,32 +1,25 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
-using Files.App.Filesystem;
-using Files.App.Helpers;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Files.App.ViewModels.Properties;
-using Files.Shared.Enums;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using System;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using System.Windows.Input;
-using Windows.Storage.Pickers;
 
 namespace Files.App.Views.Properties
 {
 	public sealed partial class LibraryPage : BasePropertiesPage, INotifyPropertyChanged
 	{
-		public event PropertyChangedEventHandler PropertyChanged;
+		private ICommonDialogService CommonDialogService { get; } = Ioc.Default.GetRequiredService<ICommonDialogService>();
+
+		public event PropertyChangedEventHandler? PropertyChanged;
 
 		private void NotifyPropertyChanged([CallerMemberName] string propertyName = "")
 		{
 			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 
-		public ObservableCollection<LibraryFolder> Folders { get; } = new ObservableCollection<LibraryFolder>();
+		public ObservableCollection<LibraryFolder> Folders { get; } = [];
 
 		public bool IsLibraryEmpty => Folders.Count == 0;
 
@@ -48,7 +41,6 @@ namespace Files.App.Views.Properties
 		public bool IsNotDefaultFolderSelected => selectedFolderIndex >= 0 && !Folders[selectedFolderIndex].IsDefault;
 
 		private bool isPinned;
-
 		public bool IsPinned
 		{
 			get => isPinned;
@@ -70,15 +62,13 @@ namespace Files.App.Views.Properties
 		{
 			InitializeComponent();
 
-			AddLocationCommand = new AsyncRelayCommand(AddLocation);
+			AddLocationCommand = new AsyncRelayCommand(AddLocationAsync);
 			SetDefaultLocationCommand = new RelayCommand(SetDefaultLocation);
 			RemoveLocationCommand = new RelayCommand(RemoveLocation);
 		}
 
-		protected override void Properties_Loaded(object sender, RoutedEventArgs e)
+		protected override async Task LoadPropertiesAsync()
 		{
-			base.Properties_Loaded(sender, e);
-
 			if (BaseProperties is LibraryProperties props)
 			{
 				Folders.Clear();
@@ -95,14 +85,17 @@ namespace Files.App.Views.Properties
 					NotifyPropertyChanged(nameof(IsLibraryEmpty));
 				}
 			}
+
+			await base.LoadPropertiesAsync();
 		}
 
-		private async Task AddLocation()
+		private async Task AddLocationAsync()
 		{
-			var folderPicker = InitializeWithWindow(new FolderPicker());
-			folderPicker.FileTypeFilter.Add("*");
+			var result = CommonDialogService.Open_FileOpenDialog(MainWindow.Instance.WindowHandle, true, [], Environment.SpecialFolder.Desktop, out var filePath);
+			if (!result)
+				return;
 
-			var folder = await folderPicker.PickSingleFolderAsync();
+			var folder = await StorageHelpers.ToStorageItem<BaseStorageFolder>(filePath);
 			if (folder is not null && !Folders.Any((f) => string.Equals(folder.Path, f.Path, StringComparison.OrdinalIgnoreCase)))
 			{
 				bool isDefault = Folders.Count == 0;
@@ -112,13 +105,6 @@ namespace Files.App.Views.Properties
 					NotifyPropertyChanged(nameof(IsLibraryEmpty));
 				}
 			}
-		}
-
-		// WINUI3
-		private FolderPicker InitializeWithWindow(FolderPicker obj)
-		{
-			WinRT.Interop.InitializeWithWindow.Initialize(obj, App.WindowHandle);
-			return obj;
 		}
 
 		private void SetDefaultLocation()
@@ -151,7 +137,7 @@ namespace Files.App.Views.Properties
 			}
 		}
 
-		private bool IsChanged(LibraryItem lib, out string newDefaultSaveFolder, out string[] newFolders, out bool? newIsPinned)
+		private bool IsChanged(LibraryItem lib, out string? newDefaultSaveFolder, out string[]? newFolders, out bool? newIsPinned)
 		{
 			bool isChanged = false;
 
@@ -168,7 +154,7 @@ namespace Files.App.Views.Properties
 
 			if ((lib.Folders?.Count ?? 0) != Folders.Count || lib.Folders?.SequenceEqual(Folders.Select(f => f.Path), StringComparer.OrdinalIgnoreCase) != true)
 			{
-				newFolders = Folders.Select(f => f.Path).ToArray();
+				newFolders = Folders.Select(f => f.Path!).ToArray();
 				isChanged = true;
 			}
 
@@ -181,16 +167,6 @@ namespace Files.App.Views.Properties
 			return isChanged;
 		}
 
-		// WINUI3
-		private static ContentDialog SetContentDialogRoot(ContentDialog contentDialog)
-		{
-			if (Windows.Foundation.Metadata.ApiInformation.IsApiContractPresent("Windows.Foundation.UniversalApiContract", 8))
-			{
-				contentDialog.XamlRoot = App.Window.Content.XamlRoot;
-			}
-			return contentDialog;
-		}
-
 		public override async Task<bool> SaveChangesAsync()
 		{
 			if (BaseProperties is LibraryProperties props)
@@ -200,7 +176,7 @@ namespace Files.App.Views.Properties
 					return true;
 
 				// Skip updates and close dialog when nothing changed
-				if (!IsChanged(props.Library, out string newDefaultSaveFolder, out string[] newFolders, out bool? newIsPinned))
+				if (!IsChanged(props.Library, out var newDefaultSaveFolder, out var newFolders, out var newIsPinned))
 					return true;
 
 				while (true)
@@ -208,7 +184,7 @@ namespace Files.App.Views.Properties
 					using var dialog = DynamicDialogFactory.GetFor_PropertySaveErrorDialog();
 					try
 					{
-						var library = await Task.Run(() => App.LibraryManager.UpdateLibrary(props.Library.ItemPath, newDefaultSaveFolder, newFolders, newIsPinned));
+						var library = await Task.Run(() => App.LibraryManager.UpdateLibrary(props.Library.ItemPath!, newDefaultSaveFolder, newFolders, newIsPinned));
 						if (library is not null)
 						{
 							props.UpdateLibrary(new LibraryItem(library));
@@ -219,7 +195,7 @@ namespace Files.App.Views.Properties
 					}
 					catch
 					{
-						await SetContentDialogRoot(dialog).TryShowAsync();
+						await dialog.TryShowAsync();
 						switch (dialog.DynamicResult)
 						{
 							case DynamicDialogResult.Primary:
@@ -240,9 +216,10 @@ namespace Files.App.Views.Properties
 		}
 
 	}
-	public class LibraryFolder : ObservableObject
+
+	public sealed partial class LibraryFolder : ObservableObject
 	{
-		public string Path { get; set; }
+		public string? Path { get; set; }
 
 		private bool isDefault;
 		public bool IsDefault

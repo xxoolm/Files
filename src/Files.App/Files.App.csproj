@@ -1,12 +1,19 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<!--  Copyright (c) Files Community. Licensed under the MIT License.  -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <Sdk Name="PublishWithSatoriGC" Version="10.0.15-satori.42242472690.2" />
+
     <PropertyGroup>
-        <TargetFramework>net7.0-windows10.0.22621.0</TargetFramework>
+        <EnableMsixTooling>true</EnableMsixTooling>
+        <PublishProfile>Properties\PublishProfiles\win-$(Platform).pubxml</PublishProfile>
+        <TargetFramework>$(WindowsTargetFramework)</TargetFramework>
         <OutputType>WinExe</OutputType>
         <AssemblyName>Files</AssemblyName>
         <DefaultLanguage>en-US</DefaultLanguage>
         <AppxBundleAutoResourcePackageQualifiers>Scale|DXFeatureLevel</AppxBundleAutoResourcePackageQualifiers>
-        <AppxDefaultResourceQualifiers>Language=en-US;af;ar;bg;ca;cs-CZ;da;da-DK;de-DE;el;en-GB;es-ES;es-419;fi-FI;fil-PH;fr-FR;he-IL;hi-IN;hu-HU;id-ID;it-IT;ja-JP;ka;ko-KR;lt;lv-LV;nb-NO;nl-NL;or-IN;pl-PL;pt-BR;pt-PT;ro-RO;ru-RU;sk-SK;sv-SE;ta;th-TH;tr-TR;uk-UA;vi;zh-Hans;zh-Hant</AppxDefaultResourceQualifiers>
-        <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+        <AppxDefaultResourceQualifiers>Language=en-US;af;ar;be-BY;bg;ca;cs-CZ;da;de-DE;el;en-GB;es-ES;es-419;fa-IR;fi-FI;fil-PH;fr-FR;he-IL;hi-IN;hr-HR;hu-HU;hy-AM;id-ID;it-IT;ja-JP;ka;km-KH;ko-KR;lt-LT;lv-LV;ms-MY;nb-NO;nl-NL;pl-PL;pt-BR;pt-PT;ro-RO;ru-RU;sk-SK;sq-AL;sr-Cyrl;sv-SE;ta;th-TH;tr-TR;uk-UA;vi;zh-Hans;zh-Hant</AppxDefaultResourceQualifiers>
+        <TargetPlatformMinVersion>$(MinimalWindowsVersion)</TargetPlatformMinVersion>
+        <AppxAddDefaultTargetDeviceFamilyItem>false</AppxAddDefaultTargetDeviceFamilyItem>
         <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
         <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
         <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
@@ -16,44 +23,71 @@
         <AppxBundlePlatforms>x86|x64|arm64</AppxBundlePlatforms>
         <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
         <Nullable>Enable</Nullable>
+        <NoWarn>$(NoWarn);CS8305</NoWarn>
+        <MSBuildWarningsNotAsErrors>$(MSBuildWarningsNotAsErrors);SATORI001;SATORI002</MSBuildWarningsNotAsErrors>
         <ApplicationManifest>app.manifest</ApplicationManifest>
         <Platforms>x86;x64;arm64</Platforms>
-        <RuntimeIdentifiers>win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
+        <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+        <RuntimeIdentifier>win-$(Platform)</RuntimeIdentifier>
         <UseWinUI>true</UseWinUI>
         <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <Configurations>Debug;Release;Sideload</Configurations>
-        <TieredCompilation>true</TieredCompilation>
-        <TieredPgo>true</TieredPgo>
+        <CETCompat>false</CETCompat>
+        <Configurations>Debug;Release</Configurations>
+        <CsWinRTIncludes>Files.App.Server;Microsoft.UI.Content.ContentExternalOutputLink;Microsoft.UI.Content.IContentExternalOutputLink</CsWinRTIncludes>
+        <PublishDir>bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\publish\</PublishDir>
+        <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
+        <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+        <PublishReadyToRunComposite Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRunComposite>
+        <ApplicationIcon>Assets\AppTiles\Dev\Logo.ico</ApplicationIcon>
+        <IsTrimmable>true</IsTrimmable>
+        <IsAotCompatible>true</IsAotCompatible>
+        <IlcGenerateMstatFile>true</IlcGenerateMstatFile>
+        <IlcGenerateDgmlFile>true</IlcGenerateDgmlFile>
+        <FilesAppServerProject>$(MSBuildThisFileDirectory)..\Files.App.Server\Files.App.Server.csproj</FilesAppServerProject>
     </PropertyGroup>
-    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-        <DefineConstants>TRACE;DEBUG;NETFX_CORE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <PropertyGroup>
+        <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     </PropertyGroup>
-    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-        <DefineConstants>TRACE;RELEASE;NETFX_CORE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-        <Optimize>true</Optimize>
+
+    <PropertyGroup Condition="'$(SENTRY_AUTH_TOKEN)' != ''">
+        <SentryOrg>files-org</SentryOrg>
+        <SentryProject>files-app</SentryProject>
+        <SentryUploadSymbols>true</SentryUploadSymbols>
     </PropertyGroup>
-    <PropertyGroup Condition="'$(Configuration)' == 'Sideload'">
-        <DefineConstants>TRACE;SIDELOAD;RELEASE;NETFX_CORE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-        <Optimize>true</Optimize>
-    </PropertyGroup>
+
     <ItemGroup>
-        <Manifest Include="$(ApplicationManifest)" />
-        <Content Include="7z.dll">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
-        <Content Include="7z64.dll">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
-        <Content Include="..\..\NOTICE.md">
-            <Link>NOTICE.md</Link>
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
-        <Content Include="Resources\BingMapsKey.txt" />
-        <Content Include="Resources\PreviewPanePropertiesInformation.json">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
-        <Content Include="Resources\PropertiesInformation.json">
+        <Compile Include="..\Files.App.Server\Settings\SettingsValueCodec.cs" Link="Utils\Serialization\SettingsValueCodec.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <DirectPInvoke Include="ADVAPI32" />
+        <DirectPInvoke Include="api-ms-win-core-com-l1-1-0" />
+        <DirectPInvoke Include="api-ms-win-core-com-l1-1-1" />
+        <DirectPInvoke Include="api-ms-win-core-winrt-l1-1-0" />
+        <DirectPInvoke Include="api-ms-win-core-winrt-robuffer-l1-1-0" />
+        <DirectPInvoke Include="api-ms-win-core-winrt-string-l1-1-0" />
+        <DirectPInvoke Include="CFGMGR32" />
+        <DirectPInvoke Include="CRYPT32" />
+        <DirectPInvoke Include="GDI32" />
+        <DirectPInvoke Include="KERNEL32.dll" />
+        <DirectPInvoke Include="Microsoft.WindowsAppRuntime.Bootstrap" />
+        <DirectPInvoke Include="OLE32" />
+        <DirectPInvoke Include="OLEAUT32" />
+        <DirectPInvoke Include="USER32" />
+        <DirectPInvoke Include="MPR" />
+        <_WindowsAppRuntimeBootstrapLibrary Include="@(WindowsAppSdkComponentPackages->'%(FullPath)lib\native\$(Platform)\Microsoft.WindowsAppRuntime.Bootstrap.lib')" />
+        <NativeLibrary Include="runtimeobject.lib" />
+        <NativeLibrary Include="cfgmgr32.lib" />
+        <NativeLibrary Include="mpr.lib" />
+        <NativeLibrary Include="@(_WindowsAppRuntimeBootstrapLibrary->Exists())" />
+    </ItemGroup>
+  
+    <ItemGroup>
+        <Content Remove="Assets\Libraries\**" />
+        <Manifest Include="app.manifest" />
+        <Content Update="Assets\Resources\**">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
         <Content Update="Assets\FilesOpenDialog\SetFilesAsDefault.reg">
@@ -62,72 +96,107 @@
         <Content Update="Assets\FilesOpenDialog\UnsetFilesAsDefault.reg">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
-        <Content Update="Assets\FilesOpenDialog\FilesLauncher.exe">
+        <Content Update="Assets\FilesOpenDialog\Files.App.Launcher.exe">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
-        <Content Remove="Assets\FilesHome.png" />
+        <Content Include="7z.dll" Condition="'$(Platform)' == 'x86'">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="7z64.dll" Condition="'$(Platform)' == 'x64'">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <Content Include="7zArm64.dll" Condition="'$(Platform)' == 'arm64'">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
+
     <ItemGroup>
-      <None Remove="UserControls\OpacityIcon.xaml" />
+        <PackageReference Include="ByteSize" />
+        <PackageReference Include="ColorCode.WinUI" />
+        <PackageReference Include="CommunityToolkit.Labs.WinUI.Controls.MarkdownTextBlock" />
+        <PackageReference Include="CommunityToolkit.Labs.WinUI.DependencyPropertyGenerator" />
+        <PackageReference Include="CommunityToolkit.Mvvm" />
+        <PackageReference Include="CommunityToolkit.WinUI.Behaviors" />
+        <PackageReference Include="CommunityToolkit.WinUI.Controls.ColorPicker" />
+        <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" />
+        <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" />
+        <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" />
+        <PackageReference Include="CommunityToolkit.WinUI.Converters" />
+        <PackageReference Include="CommunityToolkit.WinUI.Extensions" />
+        <PackageReference Include="CommunityToolkit.WinUI.Helpers" />
+        <PackageReference Include="CommunityToolkit.WinUI.Triggers" />
+        <PackageReference Include="DiscUtils.Udf" />
+        <PackageReference Include="FluentFTP" />
+        <PackageReference Include="LibGit2Sharp" />
+        <PackageReference Include="MessageFormat" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+        <PackageReference Include="Microsoft.Extensions.Logging" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
+        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+        <PackageReference Include="Microsoft.Xaml.Behaviors.WinUI.Managed" />
+        <PackageReference Include="Sentry" />
+        <PackageReference Include="SevenZipSharp" />
+        <PackageReference Include="SharpZipLib" />
+        <PackageReference Include="System.Drawing.Common" />
+        <PackageReference Include="Microsoft.WindowsAppSDK" />
+        <PackageReference Include="Microsoft.Graphics.Win2D" />
+        <PackageReference Include="TagLibSharp" />
+        <PackageReference Include="UTF.Unknown" />
+        <PackageReference Include="Microsoft.Windows.CsWinRT" />
     </ItemGroup>
+
     <ItemGroup>
-        <PackageReference Include="ByteSize" Version="2.1.1" />
-        <PackageReference Include="CommunityToolkit.Mvvm" Version="8.1.0" />
-        <PackageReference Include="FluentFTP" Version="43.0.1" />
-        <PackageReference Include="ini-parser-netstandard" Version="2.5.2" />
-        <PackageReference Include="Microsoft.AppCenter.Analytics" Version="5.0.1" />
-        <PackageReference Include="Microsoft.AppCenter.Crashes" Version="5.0.1" />
-        <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="7.0.4" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="7.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="7.0.1" />
-        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.756" />
-        <PackageReference Include="SevenZipSharp" Version="1.0.0" />
-        <PackageReference Include="SQLitePCLRaw.bundle_green" Version="2.1.4" />
-        <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.2.230313.1" />
-        <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.0.4" />
-        <PackageReference Include="Microsoft.DotNet.UpgradeAssistant.Extensions.Default.Analyzers" Version="0.4.410601" PrivateAssets="all" />
-        <PackageReference Include="CommunityToolkit.WinUI.Notifications" Version="7.1.2" />
-        <PackageReference Include="CommunityToolkit.WinUI.UI.Behaviors" Version="7.1.2" />
-        <PackageReference Include="CommunityToolkit.WinUI.UI.Controls" Version="7.1.2" />
-        <PackageReference Include="Tulpep.ActiveDirectoryObjectPicker" Version="3.0.11" />
-        <PackageReference Include="Vanara.Windows.Extensions" Version="3.4.13" />
-        <PackageReference Include="WinUIEx" Version="2.1.0" />
-        <PackageReference Include="Vanara.PInvoke.Mpr" Version="3.4.12" />
-        <PackageReference Include="Vanara.Windows.Shell" Version="3.4.13" />
-        <PackageReference Include="Microsoft.Management.Infrastructure" Version="2.0.0" />
-        <PackageReference Include="Microsoft.Management.Infrastructure.Runtime.Win" Version="2.0.1" />
+        <TargetDeviceFamily Include="Windows.Desktop">
+            <TargetPlatformMinVersion>$(TargetPlatformMinVersion)</TargetPlatformMinVersion>
+            <TargetPlatformVersion>10.0.26226.0</TargetPlatformVersion>
+        </TargetDeviceFamily>
     </ItemGroup>
+
     <ItemGroup>
-        <ProjectReference Include="..\BackgroundTasks\BackgroundTasks.csproj" />
-        <ProjectReference Include="..\Files.App.Storage\Files.App.Storage.csproj" />
-        <ProjectReference Include="..\Files.Backend\Files.Backend.csproj" />
-        <ProjectReference Include="..\Files.Sdk.Storage\Files.Sdk.Storage.csproj" />
+        <PackageReference Include="Microsoft.WindowsAppSDK.ML" ExcludeAssets="all" />
+        <PackageReference Include="Microsoft.Windows.AI.MachineLearning" ExcludeAssets="all" />
+        <PackageReference Include="Microsoft.WindowsAppSDK.Widgets" ExcludeAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <CsWinRTInputs Include="Assets\Libraries\Microsoft.UI.winmd" />
+        <CsWinRTInputs Include="..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\Files.App.Server.winmd" />
+        <None Include="..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\Files.App.Server.winmd">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>Files.App.Server.winmd</Link>
+            <Visible>false</Visible>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Files.App.BackgroundTasks\Files.App.BackgroundTasks.csproj" />
+        <ProjectReference Include="..\Files.App.Controls\Files.App.Controls.csproj" />
+        <ProjectReference Include="..\Files.Storage\Files.Storage.csproj" />
         <ProjectReference Include="..\Files.Shared\Files.Shared.csproj" />
+        <ProjectReference Include="..\Files.SourceGenerators\Files.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     </ItemGroup>
+
     <ItemGroup>
-        <TrimmerRootAssembly Include="BackgroundTasks" />
-        <TrimmerRootAssembly Include="Files" />
-        <TrimmerRootAssembly Include="Files.App.Storage" />
-        <TrimmerRootAssembly Include="Files.Backend" />
-        <TrimmerRootAssembly Include="Files.Sdk.Storage" />
-        <TrimmerRootAssembly Include="Files.Shared" />
-        <TrimmerRootAssembly Include="CommunityToolkit.Common" />
-        <TrimmerRootAssembly Include="CommunityToolkit.Mvvm" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.Notifications" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Animations" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Behaviors" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Core" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Input" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Layout" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Markdown" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Media" />
-        <TrimmerRootAssembly Include="CommunityToolkit.WinUI.UI.Controls.Primitives" />
+        <AdditionalFiles Include="Strings\en-US\Resources.resw" />
     </ItemGroup>
-    <ItemGroup>
-      <Page Update="UserControls\OpacityIcon.xaml">
-        <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
-      </Page>
-    </ItemGroup>
+
+    <!-- Files.App.Server is an out-of-process COM server, not a project reference.
+         Build it before we resolve assemblies so its .winmd is available for CsWinRT. -->
+    <Target Name="BuildFilesAppServer" BeforeTargets="ResolveAssemblyReferences">
+        <MSBuild Projects="$(FilesAppServerProject)" Targets="Build" Properties="Configuration=$(Configuration);Platform=$(Platform)" />
+    </Target>
+
+    <Target Name="PublishFilesAppServerForMsix" BeforeTargets="_ComputeAppxPackagePayload" Condition="'$(AppxPackage)' == 'true'">
+        <PropertyGroup>
+            <FilesAppServerPublishDir>$(MSBuildThisFileDirectory)..\Files.App.Server\bin\$(Platform)\$(Configuration)\$(TargetFramework)\win-$(Platform)\publish\</FilesAppServerPublishDir>
+        </PropertyGroup>
+
+        <MSBuild Projects="$(FilesAppServerProject)" Targets="Publish" Properties="Configuration=$(Configuration);Platform=$(Platform);PublishDir=$(FilesAppServerPublishDir)" />
+        <Error Condition="!Exists('$(FilesAppServerPublishDir)Files.App.Server.exe')" Text="Files.App.Server publish output was not found." />
+
+        <ItemGroup>
+            <_FilesAppServerPackageFile Include="$(FilesAppServerPublishDir)**\*" Exclude="$(FilesAppServerPublishDir)**\*.winmd;$(FilesAppServerPublishDir)**\*.pdb" />
+            <AppxPackagePayload Include="@(_FilesAppServerPackageFile)" TargetPath="Files.App.Server\%(RecursiveDir)%(Filename)%(Extension)" />
+        </ItemGroup>
+    </Target>
 </Project>

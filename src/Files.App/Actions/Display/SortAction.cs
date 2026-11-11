@@ -1,111 +1,191 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using Files.Shared.Enums;
-using System.ComponentModel;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SortByNameAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByNameAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.Name;
+		protected override SortOption SortOption
+			=> SortOption.Name;
 
-		public override string Label { get; } = "Name".GetLocalizedResource();
+		public override string Label
+			=> Strings.Name.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByNameDescription.GetLocalizedResource();
 	}
 
-	internal class SortByDateModifiedAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByDateModifiedAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.DateModified;
+		protected override SortOption SortOption
+			=> SortOption.DateModified;
 
-		public override string Label { get; } = "DateModifiedLowerCase".GetLocalizedResource();
+		public override string Label
+			=> Strings.DateModifiedLowerCase.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByDateModifiedDescription.GetLocalizedResource();
 	}
 
-	internal class SortByDateCreatedAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByDateCreatedAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.DateCreated;
+		protected override SortOption SortOption
+			=> SortOption.DateCreated;
 
-		public override string Label { get; } = "DateCreated".GetLocalizedResource();
+		public override string Label
+			=> Strings.DateCreated.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByDateCreatedDescription.GetLocalizedResource();
 	}
 
-	internal class SortBySizeAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortBySizeAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.Size;
+		protected override SortOption SortOption
+			=> SortOption.Size;
 
-		public override string Label { get; } = "Size".GetLocalizedResource();
+		public override string Label
+			=> Strings.Size.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortBySizeDescription.GetLocalizedResource();
 	}
 
-	internal class SortByTypeAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByTypeAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.FileType;
+		protected override SortOption SortOption
+			=> SortOption.FileType;
 
-		public override string Label { get; } = "Type".GetLocalizedResource();
+		public override string Label
+			=> Strings.Type.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByTypeDescription.GetLocalizedResource();
 	}
 
-	internal class SortBySyncStatusAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortBySyncStatusAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.SyncStatus;
+		protected override SortOption SortOption
+			=> SortOption.SyncStatus;
 
-		public override string Label { get; } = "SyncStatus".GetLocalizedResource();
+		public override string Label
+			=> Strings.SyncStatus.GetLocalizedResource();
 
-		protected override bool GetIsExecutable(ContentPageTypes pageType) => pageType is ContentPageTypes.CloudDrive;
+		public override string Description
+			=> Strings.SortBySyncStatusDescription.GetLocalizedResource();
+
+		protected override bool GetIsExecutable(ContentPageTypes pageType)
+			=> pageType is ContentPageTypes.CloudDrive;
 	}
 
-	internal class SortByTagAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByTagAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.FileTag;
+		protected override SortOption SortOption
+			=> SortOption.FileTag;
 
-		public override string Label { get; } = "FileTags".GetLocalizedResource();
+		public override string Label
+			=> Strings.FileTags.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByTagDescription.GetLocalizedResource();
 	}
 
-	internal class SortByOriginalFolderAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByPathAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.OriginalFolder;
+		protected override SortOption SortOption
+			=> SortOption.Path;
 
-		public override string Label { get; } = "OriginalFolder".GetLocalizedResource();
+		public override string Label
+			=> Strings.Path.GetLocalizedResource();
 
-		protected override bool GetIsExecutable(ContentPageTypes pageType) => pageType is ContentPageTypes.CloudDrive;
+		public override string Description
+			=> Strings.SortByPathDescription.GetLocalizedResource();
+
+		public override string ExtendedLabel
+			=> Label;
+
+		protected override bool GetIsExecutable(ContentPageTypes pageType)
+			=> pageType is ContentPageTypes.SearchResults;
 	}
 
-	internal class SortByDateDeletedAction : SortByAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortByOriginalFolderAction : SortByAction
 	{
-		protected override SortOption SortOption { get; } = SortOption.DateDeleted;
+		protected override SortOption SortOption
+			=> SortOption.OriginalFolder;
 
-		public override string Label { get; } = "DateDeleted".GetLocalizedResource();
+		public override string Label
+			=> Strings.OriginalFolder.GetLocalizedResource();
 
-		protected override bool GetIsExecutable(ContentPageTypes pageType) => pageType is ContentPageTypes.RecycleBin;
+		public override string Description
+			=> Strings.SortByOriginalFolderDescription.GetLocalizedResource();
+
+		protected override bool GetIsExecutable(ContentPageTypes pageType)
+			=> pageType is ContentPageTypes.RecycleBin;
+	}
+
+	[GeneratedRichCommand]
+	internal sealed partial class SortByDateDeletedAction : SortByAction
+	{
+		protected override SortOption SortOption
+			=> SortOption.DateDeleted;
+
+		public override string Label
+			=> Strings.DateDeleted.GetLocalizedResource();
+
+		public override string Description
+			=> Strings.SortByDateDeletedDescription.GetLocalizedResource();
+
+		protected override bool GetIsExecutable(ContentPageTypes pageType)
+			=> pageType is ContentPageTypes.RecycleBin;
 	}
 
 	internal abstract class SortByAction : ObservableObject, IToggleAction
 	{
-		private IContentPageContext contentContext = Ioc.Default.GetRequiredService<IContentPageContext>();
-		private IDisplayPageContext displayContext = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+		private readonly IContentPageContext contentContext;
+
+		private readonly IDisplayPageContext displayContext;
 
 		protected abstract SortOption SortOption { get; }
 
 		public abstract string Label { get; }
 
-		public string Description => "TODO: Need to be described.";
+		public abstract string Description { get; }
 
-		private bool isOn;
-		public bool IsOn => isOn;
+		public virtual ActionCategory Category
+			=> ActionCategory.Sorting;
 
-		private bool isExecutable = false;
-		public bool IsExecutable => isExecutable;
+		public virtual string ExtendedLabel
+			=> Description;
+
+		public bool IsOn
+			=> displayContext.SortOption == SortOption;
+
+		public bool IsExecutable
+			=> GetIsExecutable(contentContext.PageType);
 
 		public SortByAction()
 		{
-			isOn = displayContext.SortOption == SortOption;
-			isExecutable = GetIsExecutable(contentContext.PageType);
+			contentContext = Ioc.Default.GetRequiredService<IContentPageContext>();
+			displayContext = Ioc.Default.GetRequiredService<IDisplayPageContext>();
 
 			contentContext.PropertyChanged += ContentContext_PropertyChanged;
 			displayContext.PropertyChanged += DisplayContext_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			displayContext.SortOption = SortOption;
+			LayoutHelpers.UpdateOpenTabsPreferences();
+
 			return Task.CompletedTask;
 		}
 
@@ -114,34 +194,45 @@ namespace Files.App.Actions
 		private void ContentContext_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
 			if (e.PropertyName is nameof(IContentPageContext.PageType))
-				SetProperty(ref isExecutable, GetIsExecutable(contentContext.PageType), nameof(IsExecutable));
+				OnPropertyChanged(nameof(IsExecutable));
 		}
 
 		private void DisplayContext_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
 			if (e.PropertyName is nameof(IDisplayPageContext.SortOption))
-				SetProperty(ref isOn, displayContext.SortOption == SortOption, nameof(IsOn));
+				OnPropertyChanged(nameof(IsOn));
 		}
 	}
 
-	internal class SortAscendingAction : ObservableObject, IToggleAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortAscendingAction : ObservableObject, IToggleAction
 	{
-		private IDisplayPageContext context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+		private readonly IDisplayPageContext context;
 
-		public string Label { get; } = "Ascending".GetLocalizedResource();
+		public string Label
+			=> Strings.Ascending.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.SortAscendingDescription.GetLocalizedResource();
 
-		public bool IsOn => context.SortDirection is SortDirection.Ascending;
+		public ActionCategory Category
+			=> ActionCategory.Sorting;
+
+		public bool IsOn
+			=> context.SortDirection is SortDirection.Ascending;
 
 		public SortAscendingAction()
 		{
+			context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context.SortDirection = SortDirection.Ascending;
+			LayoutHelpers.UpdateOpenTabsPreferences();
+
 			return Task.CompletedTask;
 		}
 
@@ -152,24 +243,35 @@ namespace Files.App.Actions
 		}
 	}
 
-	internal class SortDescendingAction : ObservableObject, IToggleAction
+	[GeneratedRichCommand]
+	internal sealed partial class SortDescendingAction : ObservableObject, IToggleAction
 	{
-		private IDisplayPageContext context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+		private readonly IDisplayPageContext context;
 
-		public string Label { get; } = "Descending".GetLocalizedResource();
+		public string Label
+			=> Strings.Descending.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.SortDescendingDescription.GetLocalizedResource();
 
-		public bool IsOn => context.SortDirection is SortDirection.Descending;
+		public ActionCategory Category
+			=> ActionCategory.Sorting;
+
+		public bool IsOn
+			=> context.SortDirection is SortDirection.Descending;
 
 		public SortDescendingAction()
 		{
+			context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context.SortDirection = SortDirection.Descending;
+			LayoutHelpers.UpdateOpenTabsPreferences();
+
 			return Task.CompletedTask;
 		}
 
@@ -180,17 +282,34 @@ namespace Files.App.Actions
 		}
 	}
 
-	internal class ToggleSortDirectionAction : IAction
+	[GeneratedRichCommand]
+	internal sealed class ToggleSortDirectionAction : IAction
 	{
-		private IDisplayPageContext context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+		private readonly IDisplayPageContext context;
 
-		public string Label { get; } = "ToggleSortDirection".GetLocalizedResource();
+		public string Label
+			=> Strings.ToggleSortDirection.GetLocalizedResource();
 
-		public string Description => "TODO: Need to be described.";
+		public string Description
+			=> Strings.ToggleSortDirectionDescription.GetLocalizedResource();
 
-		public Task ExecuteAsync()
+		public ActionCategory Category
+			=> ActionCategory.Sorting;
+
+		public ToggleSortDirectionAction()
 		{
-			context.SortDirection = context.SortDirection is SortDirection.Descending ? SortDirection.Ascending : SortDirection.Descending;
+			context = Ioc.Default.GetRequiredService<IDisplayPageContext>();
+		}
+
+		public Task ExecuteAsync(object? parameter = null)
+		{
+			context.SortDirection =
+				context.SortDirection is SortDirection.Descending
+					? SortDirection.Ascending
+					: SortDirection.Descending;
+
+			LayoutHelpers.UpdateOpenTabsPreferences();
+
 			return Task.CompletedTask;
 		}
 	}

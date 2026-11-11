@@ -1,41 +1,84 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.Backend.Services.Settings;
-using Files.Shared.Enums;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.ViewModels.Settings
 {
-	public class FoldersViewModel : ObservableObject
+	public sealed partial class FoldersViewModel : ObservableObject
 	{
 		private IUserSettingsService UserSettingsService { get; } = Ioc.Default.GetRequiredService<IUserSettingsService>();
 
-		// FileTag combobox indexes (required to hide SyncStatus)
-		private readonly int FileTagSortingIndex = 5;
-		private readonly int FileTagGroupingIndex = 6;
+
+		public Dictionary<SizeUnitTypes, string> SizeUnitsOptions { get; private set; } = [];
+		public Dictionary<SingleClickOpenMode, string> SingleClickOpenModeOptions { get; private set; } = [];
 
 		public FoldersViewModel()
 		{
-			SelectedDefaultLayoutModeIndex = (int)DefaultLayoutMode;
-			SelectedDefaultSortingIndex = UserSettingsService.FoldersSettingsService.DefaultSortOption == SortOption.FileTag ? FileTagSortingIndex : (int)UserSettingsService.FoldersSettingsService.DefaultSortOption;
-			SelectedDefaultGroupingIndex = UserSettingsService.FoldersSettingsService.DefaultGroupOption == GroupOption.FileTag ? FileTagGroupingIndex : (int)UserSettingsService.FoldersSettingsService.DefaultGroupOption;
 			SelectedDeleteConfirmationPolicyIndex = (int)DeleteConfirmationPolicy;
+
+			_ = DetectNaturalLanguageSearchSupportAsync();
+
+			// Size unit format
+			SizeUnitsOptions.Add(SizeUnitTypes.BinaryUnits, Strings.Binary.GetLocalizedResource());
+			SizeUnitsOptions.Add(SizeUnitTypes.DecimalUnits, Strings.Decimal.GetLocalizedResource());
+			SizeUnitFormat = SizeUnitsOptions[UserSettingsService.FoldersSettingsService.SizeUnitFormat];
+
+			SingleClickOpenModeOptions.Add(SingleClickOpenMode.Never, Strings.Never.GetLocalizedResource());
+			SingleClickOpenModeOptions.Add(SingleClickOpenMode.OnlyForTouch, Strings.OnlyForTouch.GetLocalizedResource());
+			SingleClickOpenModeOptions.Add(SingleClickOpenMode.OnlyForMouse, Strings.OnlyForMouse.GetLocalizedResource());
+			SingleClickOpenModeOptions.Add(SingleClickOpenMode.Always, Strings.Always.GetLocalizedResource());
+			SelectedOpenFilesWithSingleClickOption = SingleClickOpenModeOptions[UserSettingsService.FoldersSettingsService.OpenFilesWithSingleClick];
+			SelectedOpenFoldersWithSingleClickOption = SingleClickOpenModeOptions[UserSettingsService.FoldersSettingsService.OpenFoldersWithSingleClick];
+			SelectedOpenFoldersInColumnsViewWithSingleClickOption = SingleClickOpenModeOptions[UserSettingsService.FoldersSettingsService.OpenFoldersInColumnsViewWithSingleClick];
+		}
+
+		internal void StartListening()
+		{
+			UserSettingsService.OnSettingChangedEvent -= OnSharedSettingChanged;
+			UserSettingsService.OnSettingChangedEvent += OnSharedSettingChanged;
+			RefreshSettings();
+		}
+
+		internal void StopListening() => UserSettingsService.OnSettingChangedEvent -= OnSharedSettingChanged;
+
+		private void OnSharedSettingChanged(object? sender, SettingChangedEventArgs e)
+		{
+			if (e.NewValue is JsonElement)
+				RefreshSettings(e.SettingName);
+		}
+
+		private void RefreshSettings(string? name = null)
+		{
+			var settings = UserSettingsService.FoldersSettingsService;
+			if (name is null or nameof(IFoldersSettingsService.DeleteConfirmationPolicy))
+			{
+				SetProperty(ref selectedDeleteConfirmationPolicyIndex, (int)settings.DeleteConfirmationPolicy, nameof(SelectedDeleteConfirmationPolicyIndex));
+			}
+			if (name is null or nameof(IFoldersSettingsService.OpenFilesWithSingleClick))
+			{
+				SetProperty(ref selectedOpenFilesWithSingleClickOption, SingleClickOpenModeOptions[settings.OpenFilesWithSingleClick], nameof(SelectedOpenFilesWithSingleClickOption));
+			}
+			if (name is null or nameof(IFoldersSettingsService.OpenFoldersWithSingleClick))
+			{
+				SetProperty(ref selectedOpenFoldersWithSingleClickOption, SingleClickOpenModeOptions[settings.OpenFoldersWithSingleClick], nameof(SelectedOpenFoldersWithSingleClickOption));
+			}
+			if (name is null or nameof(IFoldersSettingsService.OpenFoldersInColumnsViewWithSingleClick))
+			{
+				SetProperty(ref selectedOpenFoldersInColumnsViewWithSingleClickOption, SingleClickOpenModeOptions[settings.OpenFoldersInColumnsViewWithSingleClick], nameof(SelectedOpenFoldersInColumnsViewWithSingleClickOption));
+			}
+			if (name is null or nameof(IFoldersSettingsService.SizeUnitFormat))
+			{
+				SetProperty(ref sizeUnitFormat, SizeUnitsOptions[settings.SizeUnitFormat], nameof(SizeUnitFormat));
+			}
+			if (name is null or nameof(IFoldersSettingsService.OpenFoldersInNewTab))
+			{
+				OnPropertyChanged(nameof(OpenFoldersNewTab));
+			}
+			OnPropertyChanged(name ?? string.Empty);
 		}
 
 		// Properties
 
-		private int selectedDefaultLayoutModeIndex;
-		public int SelectedDefaultLayoutModeIndex
-		{
-			get => selectedDefaultLayoutModeIndex;
-			set
-			{
-				if (SetProperty(ref selectedDefaultLayoutModeIndex, value))
-				{
-					OnPropertyChanged(nameof(SelectedDefaultLayoutModeIndex));
-					DefaultLayoutMode = (FolderLayoutModes)value;
-				}
-			}
-		}
+
 
 		private int selectedDeleteConfirmationPolicyIndex;
 		public int SelectedDeleteConfirmationPolicyIndex
@@ -47,105 +90,6 @@ namespace Files.App.ViewModels.Settings
 				{
 					OnPropertyChanged(nameof(SelectedDeleteConfirmationPolicyIndex));
 					DeleteConfirmationPolicy = (DeleteConfirmationPolicies)value;
-				}
-			}
-		}
-
-		public bool SyncFolderPreferencesAcrossDirectories
-		{
-			get => UserSettingsService.FoldersSettingsService.SyncFolderPreferencesAcrossDirectories;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.SyncFolderPreferencesAcrossDirectories)
-				{
-					UserSettingsService.FoldersSettingsService.SyncFolderPreferencesAcrossDirectories = value;
-
-					ResetLayoutPreferences();
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool ShowFileTagColumn
-		{
-			get => UserSettingsService.FoldersSettingsService.ShowFileTagColumn;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.ShowFileTagColumn)
-				{
-					UserSettingsService.FoldersSettingsService.ShowFileTagColumn = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool ShowSizeColumn
-		{
-			get => UserSettingsService.FoldersSettingsService.ShowSizeColumn;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.ShowSizeColumn)
-				{
-					UserSettingsService.FoldersSettingsService.ShowSizeColumn = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool ShowTypeColumn
-		{
-			get => UserSettingsService.FoldersSettingsService.ShowTypeColumn;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.ShowTypeColumn)
-				{
-					UserSettingsService.FoldersSettingsService.ShowTypeColumn = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool ShowDateCreatedColumn
-		{
-			get => UserSettingsService.FoldersSettingsService.ShowDateCreatedColumn;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.ShowDateCreatedColumn)
-				{
-					UserSettingsService.FoldersSettingsService.ShowDateCreatedColumn = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool ShowDateColumn
-		{
-			get => UserSettingsService.FoldersSettingsService.ShowDateColumn;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.ShowDateColumn)
-				{
-					UserSettingsService.FoldersSettingsService.ShowDateColumn = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public FolderLayoutModes DefaultLayoutMode
-		{
-			get => UserSettingsService.FoldersSettingsService.DefaultLayoutMode;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.DefaultLayoutMode)
-				{
-					UserSettingsService.FoldersSettingsService.DefaultLayoutMode = value;
-
-					OnPropertyChanged();
 				}
 			}
 		}
@@ -206,30 +150,41 @@ namespace Files.App.ViewModels.Settings
 			}
 		}
 
-		public bool OpenItemsWithOneClick
+		private string selectedOpenFilesWithSingleClickOption = null!;
+		public string SelectedOpenFilesWithSingleClickOption
 		{
-			get => UserSettingsService.FoldersSettingsService.OpenItemsWithOneClick;
+			get => selectedOpenFilesWithSingleClickOption;
 			set
 			{
-				if (value != UserSettingsService.FoldersSettingsService.OpenItemsWithOneClick)
+				if (SetProperty(ref selectedOpenFilesWithSingleClickOption, value))
 				{
-					UserSettingsService.FoldersSettingsService.OpenItemsWithOneClick = value;
-
-					OnPropertyChanged();
+					UserSettingsService.FoldersSettingsService.OpenFilesWithSingleClick = SingleClickOpenModeOptions.First(e => e.Value == value).Key;
 				}
 			}
 		}
 
-		public bool ColumnLayoutOpenFoldersWithOneClick
+		private string selectedOpenFoldersWithSingleClickOption = null!;
+		public string SelectedOpenFoldersWithSingleClickOption
 		{
-			get => UserSettingsService.FoldersSettingsService.ColumnLayoutOpenFoldersWithOneClick;
+			get => selectedOpenFoldersWithSingleClickOption;
 			set
 			{
-				if (value != UserSettingsService.FoldersSettingsService.ColumnLayoutOpenFoldersWithOneClick)
+				if (SetProperty(ref selectedOpenFoldersWithSingleClickOption, value))
 				{
-					UserSettingsService.FoldersSettingsService.ColumnLayoutOpenFoldersWithOneClick = value;
+					UserSettingsService.FoldersSettingsService.OpenFoldersWithSingleClick = SingleClickOpenModeOptions.First(e => e.Value == value).Key;
+				}
+			}
+		}
 
-					OnPropertyChanged();
+		private string selectedOpenFoldersInColumnsViewWithSingleClickOption = null!;
+		public string SelectedOpenFoldersInColumnsViewWithSingleClickOption
+		{
+			get => selectedOpenFoldersInColumnsViewWithSingleClickOption;
+			set
+			{
+				if (SetProperty(ref selectedOpenFoldersInColumnsViewWithSingleClickOption, value))
+				{
+					UserSettingsService.FoldersSettingsService.OpenFoldersInColumnsViewWithSingleClick = SingleClickOpenModeOptions.First(e => e.Value == value).Key;
 				}
 			}
 		}
@@ -242,49 +197,6 @@ namespace Files.App.ViewModels.Settings
 				if (value != UserSettingsService.FoldersSettingsService.OpenFoldersInNewTab)
 				{
 					UserSettingsService.FoldersSettingsService.OpenFoldersInNewTab = value;
-
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool SortInDescendingOrder
-		{
-			get => UserSettingsService.FoldersSettingsService.DefaultDirectorySortDirection == SortDirection.Descending;
-			set
-			{
-				if (value != (UserSettingsService.FoldersSettingsService.DefaultDirectorySortDirection == SortDirection.Descending))
-				{
-					UserSettingsService.FoldersSettingsService.DefaultDirectorySortDirection = value ? SortDirection.Descending : SortDirection.Ascending;
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool GroupInDescendingOrder
-		{
-			get => UserSettingsService.FoldersSettingsService.DefaultDirectoryGroupDirection == SortDirection.Descending;
-			set
-			{
-				if (value != (UserSettingsService.FoldersSettingsService.DefaultDirectoryGroupDirection == SortDirection.Descending))
-				{
-					UserSettingsService.FoldersSettingsService.DefaultDirectoryGroupDirection = value ? SortDirection.Descending : SortDirection.Ascending;
-					OnPropertyChanged();
-				}
-			}
-		}
-
-		public bool isDefaultGrouped
-			=> UserSettingsService.FoldersSettingsService.DefaultGroupOption != GroupOption.None;
-
-		public bool ListAndSortDirectoriesAlongsideFiles
-		{
-			get => UserSettingsService.FoldersSettingsService.DefaultSortDirectoriesAlongsideFiles;
-			set
-			{
-				if (value != UserSettingsService.FoldersSettingsService.DefaultSortDirectoriesAlongsideFiles)
-				{
-					UserSettingsService.FoldersSettingsService.DefaultSortDirectoriesAlongsideFiles = value;
 
 					OnPropertyChanged();
 				}
@@ -305,34 +217,16 @@ namespace Files.App.ViewModels.Settings
 			}
 		}
 
-		private int selectedDefaultSortingIndex;
-		public int SelectedDefaultSortingIndex
+		public bool ScrollToPreviousFolderWhenNavigatingUp
 		{
-			get => selectedDefaultSortingIndex;
+			get => UserSettingsService.FoldersSettingsService.ScrollToPreviousFolderWhenNavigatingUp;
 			set
 			{
-				if (SetProperty(ref selectedDefaultSortingIndex, value))
+				if (value != UserSettingsService.FoldersSettingsService.ScrollToPreviousFolderWhenNavigatingUp)
 				{
-					OnPropertyChanged(nameof(SelectedDefaultSortingIndex));
+					UserSettingsService.FoldersSettingsService.ScrollToPreviousFolderWhenNavigatingUp = value;
 
-					UserSettingsService.FoldersSettingsService.DefaultSortOption = value == FileTagSortingIndex ? SortOption.FileTag : (SortOption)value;
-				}
-			}
-		}
-
-		private int selectedDefaultGroupingIndex;
-		public int SelectedDefaultGroupingIndex
-		{
-			get => selectedDefaultGroupingIndex;
-			set
-			{
-				if (SetProperty(ref selectedDefaultGroupingIndex, value))
-				{
-					OnPropertyChanged(nameof(SelectedDefaultGroupingIndex));
-
-					UserSettingsService.FoldersSettingsService.DefaultGroupOption = value == FileTagGroupingIndex ? GroupOption.FileTag : (GroupOption)value;
-					// Raise an event for the 'Group in descending order' toggle switch availability
-					OnPropertyChanged(nameof(isDefaultGrouped));
+					OnPropertyChanged();
 				}
 			}
 		}
@@ -421,12 +315,57 @@ namespace Files.App.ViewModels.Settings
 			}
 		}
 
-		public void ResetLayoutPreferences()
+		public bool ShowCheckboxesWhenSelectingItems
 		{
-			// Is this proper practice?
-			var dbInstance = FolderSettingsViewModel.GetDbInstance();
+			get => UserSettingsService.FoldersSettingsService.ShowCheckboxesWhenSelectingItems;
+			set
+			{
+				if (value != UserSettingsService.FoldersSettingsService.ShowCheckboxesWhenSelectingItems)
+				{
+					UserSettingsService.FoldersSettingsService.ShowCheckboxesWhenSelectingItems = value;
 
-			dbInstance.ResetAll();
+					OnPropertyChanged();
+				}
+			}
+		}
+
+		private bool isNaturalLanguageSearchSupported;
+		public bool IsNaturalLanguageSearchSupported
+		{
+			get => isNaturalLanguageSearchSupported;
+			private set => SetProperty(ref isNaturalLanguageSearchSupported, value);
+		}
+
+		public bool EnableNaturalLanguageSearch
+		{
+			get => UserSettingsService.GeneralSettingsService.EnableNaturalLanguageSearch;
+			set
+			{
+				if (value != UserSettingsService.GeneralSettingsService.EnableNaturalLanguageSearch)
+				{
+					UserSettingsService.GeneralSettingsService.EnableNaturalLanguageSearch = value;
+
+					OnPropertyChanged();
+				}
+			}
+		}
+
+		private async Task DetectNaturalLanguageSearchSupportAsync()
+		{
+			IsNaturalLanguageSearchSupported = await Task.Run(NaturalLanguageSearch.IsAvailable);
+		}
+
+		private string sizeUnitFormat = null!;
+		public string SizeUnitFormat
+		{
+			get => sizeUnitFormat;
+			set
+			{
+				if (SetProperty(ref sizeUnitFormat, value))
+				{
+					UserSettingsService.FoldersSettingsService.SizeUnitFormat = SizeUnitsOptions.First(e => e.Value == value).Key;
+				}
+			}
 		}
 	}
 }

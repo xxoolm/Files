@@ -1,0 +1,404 @@
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Microsoft.Extensions.Logging;
+using System.Collections.Specialized;
+using System.IO;
+using System.Runtime.InteropServices;
+using Windows.Win32.UI.Shell;
+
+namespace Files.App.Data.Models
+{
+	public sealed partial class PinnedFoldersManager
+	{
+		private IUserSettingsService userSettingsService { get; } = Ioc.Default.GetRequiredService<IUserSettingsService>();
+		private IQuickAccessService QuickAccessService { get; } = Ioc.Default.GetRequiredService<IQuickAccessService>();
+
+		public EventHandler<NotifyCollectionChangedEventArgs>? DataChanged;
+
+		private readonly SemaphoreSlim addSyncSemaphore = new(1, 1);
+
+		public List<string> PinnedFolders { get; set; } = [];
+
+		private int _syncSuspendCount;
+
+		public bool IsSyncSuspended => Volatile.Read(ref _syncSuspendCount) > 0;
+
+		/// <summary>
+		/// Suspends sync until the returned scope is disposed.
+		/// </summary>
+		public IDisposable SuspendSync()
+		{
+			Interlocked.Increment(ref _syncSuspendCount);
+			return new SyncSuspensionScope(this);
+		}
+
+		private sealed partial class SyncSuspensionScope(PinnedFoldersManager owner) : IDisposable
+		{
+			private int _disposed;
+
+			public void Dispose()
+			{
+				if (Interlocked.Exchange(ref _disposed, 1) == 0)
+					Interlocked.Decrement(ref owner._syncSuspendCount);
+			}
+		}
+
+		public readonly List<INavigationControlItem> _PinnedFolderItems = [];
+
+		[JsonIgnore]
+		public IReadOnlyList<INavigationControlItem> PinnedFolderItems
+		{
+			get
+			{
+				lock (_PinnedFolderItems)
+					return _PinnedFolderItems.ToList().AsReadOnly();
+			}
+		}
+
+		/// <summary>
+		/// Updates items with the pinned items from the explorer sidebar
+		/// </summary>
+		public async Task UpdateItemsWithExplorerAsync()
+		{
+			if (IsSyncSuspended)
+				return;
+
+			await addSyncSemaphore.WaitAsync();
+
+			try
+			{
+				var formerPinnedFolders = PinnedFolders.ToList();
+
+				PinnedFolders = (await QuickAccessService.GetPinnedFoldersAsync())
+					.Where(link => (bool?)link.Properties["System.Home.IsPinned"] ?? false)
+					.Select(link => link.FilePath!).ToList();
+
+				if (formerPinnedFolders.SequenceEqual(PinnedFolders))
+					return;
+				if (formerPinnedFolders.Count == PinnedFolders.Count &&
+					new HashSet<string>(formerPinnedFolders, StringComparer.OrdinalIgnoreCase)
+						.SetEquals(PinnedFolders))
+				{
+					ApplyReorderToPinnedItems();
+					return;
+				}
+
+				RemoveStaleSidebarItems();
+				if (formerPinnedFolders.Count == 0)
+					await AddAllItemsToSidebarAsync();
+				else
+					await AddMissingItemsToSidebarAsync();
+
+				ApplyReorderToPinnedItems();
+			}
+			finally
+			{
+				addSyncSemaphore.Release();
+			}
+		}
+
+		/// <summary>
+		/// Inserts items at the given user-pinned index so the sidebar updates before the shell
+		/// save completes.
+		/// </summary>
+		internal async Task InsertItemsAsync(string[] paths, int pinnedIndex)
+		{
+			foreach (var path in paths)
+			{
+				if (ContainsPinnedItem(path))
+					continue;
+
+				var locationItem = await CreateLocationItemFromPathAsync(path);
+
+				int insertIndex;
+				lock (_PinnedFolderItems)
+				{
+					if (ContainsPinnedItem(path))
+						continue;
+
+					insertIndex = Math.Min(GetPinnedItemsBaseIndex() + pinnedIndex, _PinnedFolderItems.Count);
+					_PinnedFolderItems.Insert(insertIndex, locationItem);
+				}
+
+				pinnedIndex++;
+				DataChanged?.Invoke(SectionType.Pinned, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, locationItem, insertIndex));
+			}
+		}
+
+		private async Task AddMissingItemsToSidebarAsync()
+		{
+			if (!userSettingsService.GeneralSettingsService.ShowPinnedSection)
+				return;
+
+			var missingPaths = PinnedFolders.Where(path => !ContainsPinnedItem(path)).ToArray();
+			var locationItems = await Task.WhenAll(missingPaths.Select(path => CreateLocationItemFromPathAsync(path)));
+			foreach (var locationItem in locationItems)
+				AddLocationItemToSidebar(locationItem);
+		}
+
+		private bool ContainsPinnedItem(string path)
+		{
+			lock (_PinnedFolderItems)
+				return _PinnedFolderItems.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
+		}
+
+		private void ApplyReorderToPinnedItems()
+		{
+			var moves = new List<(INavigationControlItem Item, int NewIndex, int OldIndex)>();
+
+			lock (_PinnedFolderItems)
+			{
+				int baseIndex = GetPinnedItemsBaseIndex();
+				for (int i = 0; i < PinnedFolders.Count; i++)
+				{
+					var path = PinnedFolders[i];
+					var currentItem = _PinnedFolderItems.FirstOrDefault(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
+					if (currentItem is null)
+						continue;
+
+					int oldIndex = _PinnedFolderItems.IndexOf(currentItem);
+					int newIndex = baseIndex + i;
+					if (oldIndex == newIndex || newIndex >= _PinnedFolderItems.Count)
+						continue;
+
+					_PinnedFolderItems.RemoveAt(oldIndex);
+					_PinnedFolderItems.Insert(newIndex, currentItem);
+					moves.Add((currentItem, newIndex, oldIndex));
+				}
+			}
+
+			foreach (var move in moves)
+				DataChanged?.Invoke(SectionType.Pinned, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Move, move.Item, move.NewIndex, move.OldIndex));
+		}
+
+		/// <summary>
+		/// Returns the index of the first user-pinned slot, i.e. the slot after the last default
+		/// location. Must be called while holding the <c>_PinnedFolderItems</c> lock.
+		/// </summary>
+		private int GetPinnedItemsBaseIndex()
+			=> _PinnedFolderItems.FindLastIndex(x => x is LocationItem { IsDefaultLocation: true }) + 1;
+
+		/// <summary>
+		/// Returns the index of the location item in the navigation sidebar
+		/// </summary>
+		/// <param name="locationItem">The location item</param>
+		/// <returns>Index of the item</returns>
+		public int IndexOfItem(INavigationControlItem locationItem)
+		{
+			lock (_PinnedFolderItems)
+			{
+				return _PinnedFolderItems.FindIndex(x => x.Path == locationItem.Path);
+			}
+		}
+
+		public async Task<LocationItem> CreateLocationItemFromPathAsync(string path)
+		{
+			var isLibrary = LibraryManager.IsLibraryPath(path);
+			var libraryDisplayName = isLibrary ? GetLibraryDisplayName(path) : null;
+
+			var item = await FilesystemTasks.WrapNullable(() => DriveHelpers.GetRootFromPathAsync(path));
+			var res = await FilesystemTasks.WrapNullable(() => StorageFileExtensions.DangerousGetFolderFromPathAsync(path, item));
+			LocationItem locationItem;
+
+			if (string.Equals(path, Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase))
+				locationItem = LocationItem.Create<RecycleBinLocationItem>();
+			else
+			{
+				locationItem = LocationItem.Create<LocationItem>();
+
+				if (path.Equals(Constants.UserEnvironmentPaths.MyComputerPath, StringComparison.OrdinalIgnoreCase))
+					locationItem.Text = Strings.ThisPC.GetLocalizedResource();
+				else if (path.Equals(Constants.UserEnvironmentPaths.NetworkFolderPath, StringComparison.OrdinalIgnoreCase))
+					locationItem.Text = Strings.Network.GetLocalizedResource();
+			}
+
+			locationItem.Path = path;
+			locationItem.Section = SectionType.Pinned;
+			locationItem.MenuOptions = new ContextMenuOptions
+			{
+				IsLocationItem = true,
+				ShowProperties = true,
+				ShowUnpinItem = true,
+				ShowShellItems = true,
+				ShowEmptyRecycleBin = string.Equals(path, Constants.UserEnvironmentPaths.RecycleBinPath, StringComparison.OrdinalIgnoreCase)
+			};
+			locationItem.IsDefaultLocation = false;
+			locationItem.Text = libraryDisplayName ?? res?.Result?.DisplayName ?? Path.GetFileName(path.TrimEnd('\\'));
+
+			// Load icons fire-and-forget so the section renders immediately; Icon is observable and swaps in when ready.
+			if (isLibrary)
+			{
+				// Load from the .library-ms directly (isFolder: false) since the path was resolved to a destination folder.
+				locationItem.IsInvalid = false;
+				_ = LoadIconForLocationItemAsync(locationItem, path, isFolder: false);
+			}
+			else if (res)
+			{
+				locationItem.IsInvalid = false;
+				if (res!.Result is { } folder)
+					_ = LoadIconForLocationItemAsync(locationItem, folder.Path);
+			}
+			else
+			{
+				locationItem.IsInvalid = true;
+				Debug.WriteLine($"Pinned item was invalid {res?.ErrorCode}, item: {path}");
+				_ = LoadDefaultIconForLocationItemAsync(locationItem);
+			}
+
+			return locationItem;
+		}
+
+		private static string? GetLibraryDisplayName(string libraryPath)
+		{
+			using var storable = WindowsStorable.TryParse(libraryPath);
+			if (storable is null)
+				return null;
+
+			var displayName = storable.GetDisplayName(SIGDN.SIGDN_NORMALDISPLAY);
+			return string.IsNullOrEmpty(displayName) ? null : displayName;
+		}
+
+		private async Task LoadIconForLocationItemAsync(LocationItem locationItem, string path, bool isFolder = true)
+		{
+			try
+			{
+				var result = await FileThumbnailHelper.GetIconAsync(
+					path,
+					Constants.ShellIconSizes.Small,
+					isFolder,
+					IconOptions.ReturnIconOnly | IconOptions.SkipSizeSnapping);
+
+				locationItem.IconData = result;
+
+				// Assign Icon on the UI thread: it raises PropertyChanged, which builds a XAML IconElement in a realized SidebarItem.
+				await MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+				{
+					var bitmapImage = await locationItem.IconData.ToBitmapAsync();
+					if (bitmapImage is not null)
+						locationItem.Icon = bitmapImage;
+				});
+			}
+			catch (Exception ex)
+			{
+				App.Logger.LogWarning(ex, $"Error loading icon for {path}");
+			}
+		}
+
+		private async Task LoadDefaultIconForLocationItemAsync(LocationItem locationItem)
+		{
+			try
+			{
+				await MainWindow.Instance.DispatcherQueue.EnqueueOrInvokeAsync(async () =>
+				{
+					var defaultIcon = await UIHelpers.GetSidebarIconResource(Constants.ImageRes.Folder);
+					locationItem.Icon = defaultIcon;
+				});
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"Error loading default icon: {ex.Message}");
+			}
+		}
+
+		/// <summary>
+		/// Adds the item (from a path) to the navigation sidebar
+		/// </summary>
+		/// <param name="path">The path which to save</param>
+		/// <returns>Task</returns>
+		public async Task AddItemToSidebarAsync(string path)
+		{
+			var locationItem = await CreateLocationItemFromPathAsync(path);
+
+			AddLocationItemToSidebar(locationItem);
+		}
+
+		/// <summary>
+		/// Adds the location item to the navigation sidebar
+		/// </summary>
+		/// <param name="locationItem">The location item which to save</param>
+		private void AddLocationItemToSidebar(LocationItem locationItem)
+		{
+			int insertIndex = -1;
+			lock (_PinnedFolderItems)
+			{
+				if (_PinnedFolderItems.Any(x => x.Path == locationItem.Path))
+					return;
+
+				var lastItem = _PinnedFolderItems.LastOrDefault(x => x.ItemType is NavigationControlItemType.Location);
+				insertIndex = lastItem is not null ? _PinnedFolderItems.IndexOf(lastItem) + 1 : 0;
+				_PinnedFolderItems.Insert(insertIndex, locationItem);
+			}
+
+			DataChanged?.Invoke(SectionType.Pinned, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, locationItem, insertIndex));
+		}
+
+		/// <summary>
+		/// Adds all items to the navigation sidebar
+		/// </summary>
+		public async Task AddAllItemsToSidebarAsync()
+		{
+			if (!userSettingsService.GeneralSettingsService.ShowPinnedSection)
+				return;
+
+			// Build items concurrently to avoid serializing N shell round-trips on the startup path.
+			var locationItems = await Task.WhenAll(PinnedFolders.Select(p => CreateLocationItemFromPathAsync(p)));
+
+			lock (_PinnedFolderItems)
+			{
+				foreach (var locationItem in locationItems)
+				{
+					if (_PinnedFolderItems.Any(x => x.Path == locationItem.Path))
+						continue;
+
+					var lastItem = _PinnedFolderItems.LastOrDefault(x => x.ItemType is NavigationControlItemType.Location);
+					var insertIndex = lastItem is not null ? _PinnedFolderItems.IndexOf(lastItem) + 1 : 0;
+					_PinnedFolderItems.Insert(insertIndex, locationItem);
+				}
+			}
+
+			// One ordered Reset instead of per-item Add events, which can interleave on the dispatcher and land out of order.
+			DataChanged?.Invoke(SectionType.Pinned, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+		}
+
+		/// <summary>
+		/// Removes stale items in the navigation sidebar
+		/// </summary>
+		public void RemoveStaleSidebarItems()
+		{
+			// Remove unpinned items from PinnedFolderItems
+			foreach (var childItem in PinnedFolderItems)
+			{
+				if (childItem is LocationItem item && !item.IsDefaultLocation && !Enumerable.Contains<string?>(PinnedFolders, item.Path))
+				{
+					lock (_PinnedFolderItems)
+					{
+						_PinnedFolderItems.Remove(item);
+					}
+					DataChanged?.Invoke(SectionType.Pinned, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, item));
+				}
+			}
+		}
+
+		public async Task ReloadAsync()
+		{
+			if (IsSyncSuspended)
+				return;
+
+			await SafetyExtensions.IgnoreExceptions(async () =>
+			{
+				await LoadAsync();
+				var pinnedFolders = await QuickAccessService.GetPinnedFoldersAsync();
+				App.QuickAccessManager.UpdateQuickAccessWidget?.Invoke(null, new ModifyQuickAccessEventArgs(pinnedFolders.ToArray(), true)
+				{
+					Reset = true
+				});
+			}, App.Logger, typeof(COMException));
+		}
+
+		public async Task LoadAsync()
+		{
+			await UpdateItemsWithExplorerAsync();
+		}
+	}
+}

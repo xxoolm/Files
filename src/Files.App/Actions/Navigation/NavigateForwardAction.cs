@@ -1,38 +1,48 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.ComponentModel;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class NavigateForwardAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class NavigateForwardAction : ObservableObject, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Forward".GetLocalizedResource();
+		public string Label
+			=> Strings.Forward.GetLocalizedResource();
 
-		public string Description { get; } = "NavigateForward".GetLocalizedResource();
+		public string Description
+			=> Strings.NavigateForwardDescription.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.Right, VirtualKeyModifiers.Menu);
-		public HotKey SecondHotKey { get; } = new(VirtualKey.XButton2);
-		public HotKey MediaHotKey { get; } = new(VirtualKey.GoForward);
+		public ActionCategory Category
+			=> ActionCategory.Navigation;
 
-		public RichGlyph Glyph { get; } = new("\uE72A");
+		public HotKey HotKey
+			=> new(Keys.Right, KeyModifiers.Alt);
 
-		public bool IsExecutable => context.CanGoForward;
+		public HotKey SecondHotKey
+			=> new(Keys.Mouse5);
+
+		public HotKey MediaHotKey
+			=> new(Keys.GoForward, KeyModifiers.None, false);
+
+		public RichGlyph Glyph
+			=> new("\uE72A");
+
+		public bool IsExecutable
+			=> context.CanGoForward;
 
 		public NavigateForwardAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
 			context.ShellPage!.Forward_Click();
+
 			return Task.CompletedTask;
 		}
 

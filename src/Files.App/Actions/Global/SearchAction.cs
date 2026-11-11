@@ -1,38 +1,49 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
-using System.ComponentModel;
-using System.Threading.Tasks;
-using Windows.System;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SearchAction : ObservableObject, IAction
+	[GeneratedRichCommand]
+	internal sealed partial class SearchAction : ObservableObject, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		private readonly IContentPageContext context;
 
-		public string Label { get; } = "Search".GetLocalizedResource();
+		public string Label
+			=> Strings.Search.GetLocalizedResource();
 
-		public string Description { get; } = "TODO: Need to be described.";
+		public string Description
+			=> Strings.SearchDescription.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.F, VirtualKeyModifiers.Control);
+		public ActionCategory Category
+			=> ActionCategory.Open;
 
-		public HotKey SecondHotKey { get; } = new(VirtualKey.F3);
+		public HotKey HotKey
+			=> new(Keys.F, KeyModifiers.Ctrl);
 
-		public RichGlyph Glyph { get; } = new();
+		public HotKey SecondHotKey
+			=> new(Keys.F3);
 
-		public bool IsExecutable => !context.IsSearchBoxVisible;
+		public RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.Omnibar.Search");
+
+		public bool IsExecutable
+			=> context.ShellPage is not null;
 
 		public SearchAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
-			context.ShellPage!.ToolbarViewModel.SwitchSearchBoxVisibility();
+			// Check if ShellPage is available before executing the action
+			if (context.ShellPage is null)
+				return Task.CompletedTask;
+
+			_ = context.ShellPage.ToolbarViewModel.SwitchToSearchMode();
+
 			return Task.CompletedTask;
 		}
 
@@ -40,7 +51,7 @@ namespace Files.App.Actions
 		{
 			switch (e.PropertyName)
 			{
-				case nameof(IContentPageContext.IsSearchBoxVisible):
+				case nameof(IContentPageContext.ShellPage):
 					OnPropertyChanged(nameof(IsExecutable));
 					break;
 			}

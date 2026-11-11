@@ -1,66 +1,59 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Helpers;
-using Files.App.ViewModels;
-using System.ComponentModel;
-using System.Linq;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
+using Files.Shared.Helpers;
 using Windows.Graphics.Imaging;
 
 namespace Files.App.Actions
 {
 	internal abstract class BaseRotateAction : ObservableObject, IAction
 	{
-		private readonly IContentPageContext context = Ioc.Default.GetRequiredService<IContentPageContext>();
+		protected readonly IContentPageContext context;
+
+		private readonly InfoPaneViewModel _infoPaneViewModel;
 
 		public abstract string Label { get; }
 
 		public abstract string Description { get; }
 
+		public virtual ActionCategory Category
+			=> ActionCategory.Image;
+
 		public abstract RichGlyph Glyph { get; }
 
 		protected abstract BitmapRotation Rotation { get; }
 
-		public bool IsExecutable => IsContextPageTypeAdaptedToCommand() &&
-			(context.ShellPage?.SlimContentPage?.SelectedItemsPropertiesViewModel?.IsSelectedItemImage ?? false);
+		public bool IsExecutable =>
+			context.ShellPage is not null &&
+			context.ShellPage.SlimContentPage is not null &&
+			context.PageType != ContentPageTypes.RecycleBin &&
+			context.PageType != ContentPageTypes.ZipFolder &&
+			context.PageType != ContentPageTypes.ReleaseNotes &&
+			context.PageType != ContentPageTypes.Settings &&
+			context.HasSelection &&
+			context.SelectedItems.All(x => FileExtensionHelpers.IsCompatibleToSetAsWindowsWallpaper(x.FileExtension));
 
 		public BaseRotateAction()
 		{
+			context = Ioc.Default.GetRequiredService<IContentPageContext>();
+			_infoPaneViewModel = Ioc.Default.GetRequiredService<InfoPaneViewModel>();
+
 			context.PropertyChanged += Context_PropertyChanged;
 		}
 
-		public async Task ExecuteAsync()
+		public async Task ExecuteAsync(object? parameter = null)
 		{
-			foreach (var image in context.SelectedItems)
-				await BitmapHelper.Rotate(PathNormalization.NormalizePath(image.ItemPath), Rotation);
+			await Task.WhenAll(context.SelectedItems.Select(image => BitmapHelper.RotateAsync(PathNormalization.NormalizePath(image.ItemPath!), Rotation)));
 
 			context.ShellPage?.SlimContentPage?.ItemManipulationModel?.RefreshItemsThumbnail();
-			Ioc.Default.GetRequiredService<PreviewPaneViewModel>().UpdateSelectedItemPreview();
-		}
 
-		private bool IsContextPageTypeAdaptedToCommand()
-		{
-			return context.PageType is not ContentPageTypes.RecycleBin
-				and not ContentPageTypes.ZipFolder
-				and not ContentPageTypes.None;
+			await _infoPaneViewModel.UpdateSelectedItemPreviewAsync();
 		}
 
 		private void Context_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			if (e.PropertyName is nameof(IContentPageContext.SelectedItem))
-			{
-				if (context.ShellPage is not null && context.ShellPage.SlimContentPage is not null)
-				{
-					var viewModel = context.ShellPage.SlimContentPage.SelectedItemsPropertiesViewModel;
-					var extensions = context.SelectedItems.Select(selectedItem => selectedItem.FileExtension).Distinct().ToList();
-
-					viewModel.CheckAllFileExtensions(extensions);
-				}
-
+			if (e.PropertyName is nameof(IContentPageContext.SelectedItems))
 				OnPropertyChanged(nameof(IsExecutable));
-			}
 		}
 	}
 }

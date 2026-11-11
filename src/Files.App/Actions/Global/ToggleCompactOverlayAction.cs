@@ -1,45 +1,50 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.DependencyInjection;
-using Files.App.Commands;
-using Files.App.Contexts;
-using Files.App.Extensions;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Microsoft.UI.Windowing;
-using System.ComponentModel;
-using System.Threading.Tasks;
 using Windows.Graphics;
-using Windows.System;
 
 namespace Files.App.Actions
 {
-	internal class ToggleCompactOverlayAction : ObservableObject, IToggleAction
+	[GeneratedRichCommand]
+	internal sealed partial class ToggleCompactOverlayAction : ObservableObject, IToggleAction
 	{
-		private readonly IWindowContext windowContext = Ioc.Default.GetRequiredService<IWindowContext>();
+		private readonly IWindowContext windowContext;
 
-		public string Label { get; } = "ToggleCompactOverlay".GetLocalizedResource();
+		public string Label
+			=> Strings.ToggleCompactOverlay.GetLocalizedResource();
 
-		public HotKey HotKey { get; } = new(VirtualKey.F12);
+		public HotKey HotKey
+			=> new(Keys.F12);
 
-		public string Description => "ToggleCompactOverlayDescription".GetLocalizedResource();
+		public string Description
+			=> Strings.ToggleCompactOverlayDescription.GetLocalizedResource();
 
-		public bool IsOn => windowContext.IsCompactOverlay;
+		public ActionCategory Category
+			=> ActionCategory.Window;
+
+		public bool IsOn
+			=> windowContext.IsCompactOverlay;
 
 		public ToggleCompactOverlayAction()
 		{
+			windowContext = Ioc.Default.GetRequiredService<IWindowContext>();
+
 			windowContext.PropertyChanged += WindowContext_PropertyChanged;
 		}
 
-		public Task ExecuteAsync()
+		public Task ExecuteAsync(object? parameter = null)
 		{
-			var window = App.GetAppWindow(App.Window);
+			var appWindow = MainWindow.Instance.AppWindow;
 
 			if (windowContext.IsCompactOverlay)
 			{
-				window.SetPresenter(AppWindowPresenterKind.Overlapped);
+				appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
 			}
 			else
 			{
-				window.SetPresenter(AppWindowPresenterKind.CompactOverlay);
-				window.Resize(new SizeInt32(400, 350));
+				appWindow.SetPresenter(AppWindowPresenterKind.CompactOverlay);
+				appWindow.Resize(new SizeInt32(400, 350));
 			}
 
 			return Task.CompletedTask;

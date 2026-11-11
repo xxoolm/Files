@@ -1,17 +1,23 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using Windows.Graphics.Imaging;
 
 namespace Files.App.Actions
 {
-	internal class RotateLeftAction : BaseRotateAction
+	[GeneratedRichCommand]
+	internal sealed partial class RotateLeftAction : BaseRotateAction
 	{
-		public override string Label { get; } = "RotateLeft".GetLocalizedResource();
+		public override string Label
+			=> Strings.RotateLeft.GetLocalizedResource();
 
-		public override string Description => "TODO: Need to be described.";
+		public override string Description
+			=> Strings.RotateLeftDescription.GetLocalizedFormatResource(context.SelectedItems.Count);
 
-		public override RichGlyph Glyph { get; } = new RichGlyph(opacityStyle: "ColorIconRotateLeft");
+		public override RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.ImageRotate.ACW");
 
-		protected override BitmapRotation Rotation => BitmapRotation.Clockwise270Degrees;
+		protected override BitmapRotation Rotation
+			=> BitmapRotation.Clockwise270Degrees;
 	}
 }

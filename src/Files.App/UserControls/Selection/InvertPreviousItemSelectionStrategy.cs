@@ -1,9 +1,11 @@
-using System.Collections.Generic;
+// Copyright (c) Files Community
+// Licensed under the MIT License.
+
 using System.Runtime.InteropServices;
 
 namespace Files.App.UserControls.Selection
 {
-	internal class InvertPreviousItemSelectionStrategy : ItemSelectionStrategy
+	internal sealed class InvertPreviousItemSelectionStrategy : ItemSelectionStrategy
 	{
 		private readonly List<object> prevSelectedItems;
 

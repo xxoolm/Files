@@ -1,26 +1,40 @@
-﻿using Files.App.Commands;
-using Files.App.Extensions;
-using Files.App.Helpers;
-using System.Linq;
-using System.Threading.Tasks;
+﻿// Copyright (c) Files Community
+// Licensed under the MIT License.
 
 namespace Files.App.Actions
 {
-	internal class SetAsSlideshowBackgroundAction : BaseSetAsAction
+	[GeneratedRichCommand]
+	internal sealed partial class SetAsSlideshowBackgroundAction : BaseSetAsAction
 	{
-		public override string Label { get; } = "SetAsSlideshow".GetLocalizedResource();
+		public override string Label
+			=> Strings.Slideshow.GetLocalizedResource();
 
-		public override string Description => "TODO: Need to be described.";
+		public override string ExtendedLabel
+			=> Strings.SetAsSlideshow.GetLocalizedResource();
 
-		public override RichGlyph Glyph { get; } = new("\uE91B");
+		public override string Description
+			=> Strings.SetAsSlideshowBackgroundDescription.GetLocalizedResource();
 
-		public override bool IsExecutable => base.IsExecutable &&
-			context.SelectedItems.Count > 1;
+		public override RichGlyph Glyph
+			=> new(themedIconStyle: "App.ThemedIcons.SetSlideshow.16");
 
-		public override Task ExecuteAsync()
+		public override bool IsExecutable =>
+			base.IsExecutable &&
+			ContentPageContext.SelectedItems.Count > 1;
+
+		public override Task ExecuteAsync(object? parameter = null)
 		{
-			var paths = context.SelectedItems.Select(item => item.ItemPath).ToArray();
-			WallpaperHelpers.SetSlideshow(paths);
+			if (!IsExecutable || ContentPageContext.SelectedItems.Select(item => item.ItemPath!).ToArray() is not string[] paths || paths.Length is 0)
+				return Task.CompletedTask;
+
+			try
+			{
+				WindowsWallpaperService.SetDesktopSlideshow(paths);
+			}
+			catch (Exception ex)
+			{
+				ShowErrorDialog(ex.Message);
+			}
 
 			return Task.CompletedTask;
 		}
